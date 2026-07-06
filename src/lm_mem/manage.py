@@ -18,8 +18,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent  # src/lm_mem/ → project root
-VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
-VENV_CHROMA = ROOT / ".venv" / "bin" / "chroma"
+PYTHON = os.environ.get("LM_MEM_PYTHON") or sys.executable
+_CHROMA_CMD = os.environ.get("LM_MEM_CHROMA") or "chroma"
 _DATA_ROOT = os.environ.get("LM_MEM_DATA_DIR") or str(Path.home() / ".lm-mem")
 PID_DIR = Path(_DATA_ROOT) / "pids"
 PID_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ def _backend_start(host=None, port=None):
     DB_PATH = _get_db_path()
     log = open(str(PID_DIR.parent / "logs" / "backend.log"), "ab")
     proc = subprocess.Popen(
-        [str(VENV_CHROMA), "run", "--path", DB_PATH, "--host", host, "--port", str(port)],
+        [str(_CHROMA_CMD), "run", "--path", DB_PATH, "--host", host, "--port", str(port)],
         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
     )
     BACKEND_PID_FILE.write_text(str(proc.pid))
@@ -130,7 +130,7 @@ def _web_start(host=None, port=None):
     env["LM_MEM_WEB_HOST"] = host
     env["LM_MEM_WEB_PORT"] = str(port)
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), str(ROOT / "web.py")],
+        [str(PYTHON), str(Path(__file__).parent / "web.py")],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL, start_new_session=True, env=env,
     )
