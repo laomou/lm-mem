@@ -171,7 +171,12 @@ def _web_status(host=None, port=None):
 
 def _mcp_run():
     """在当前进程内加载并运行 MCP server(stdio 模式)。"""
-    os.environ["LM_MEM_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+    backend_host = os.environ.get("LM_MEM_BACKEND_HOST", BACKEND_HOST)
+    backend_port = os.environ.get("LM_MEM_BACKEND_PORT", str(BACKEND_PORT))
+    os.environ.setdefault(
+        "LM_MEM_BACKEND_URL",
+        f"http://{backend_host}:{backend_port}",
+    )
     from lm_mem.mcp_tools import mcp
     mcp.run()
 

@@ -6,8 +6,6 @@
 
 ```bash
 pip install lm-mem
-# 或
-uvx lm-mem-mcp
 ```
 
 ## 使用
@@ -16,13 +14,8 @@ uvx lm-mem-mcp
 # 启动后端
 lm-mem backend start
 
-# 启动 Web UI (http://127.0.0.1:7531)
-lm-mem web start
-
 # MCP Server (stdio)
-lm-mem-mcp
-# 或
-uvx lm-mem-mcp
+lm-mem mcp
 ```
 
 ## MCP 客户端配置
@@ -32,7 +25,10 @@ uvx lm-mem-mcp
   "mcpServers": {
     "memory": {
       "command": "uvx",
-      "args": ["lm-mem-mcp"]
+      "args": ["lm-mem", "mcp"],
+      "env": {
+        "LM_MEM_BACKEND_URL": "http://127.0.0.1:8901"
+      }
     }
   }
 }

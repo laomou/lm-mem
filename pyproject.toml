@@ -11,7 +11,6 @@ dependencies = [
 
 [project.scripts]
 lm-mem = "lm_mem.manage:main"
-lm-mem-mcp = "lm_mem.mcp_tools:_run"
 
 [dependency-groups]
 dev = [
