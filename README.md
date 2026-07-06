@@ -69,7 +69,3 @@ client.get("mem-id-xxx")
 client.update("mem-id-xxx", content="新内容")
 client.delete("mem-id-xxx")
 ```
-
-方法一览:`add` / `search` / `get` / `list` / `update` / `delete` / `delete_all`
-/ `delete_entity` / `list_entities` / `stats` / `get_user_context` / `export`
-/ `import_data` / `purge_expired`。
