@@ -2,24 +2,33 @@
 
 MCP 进程只当纯客户端,连接外部常驻后端(由 manage.py 托管)。
 后端生命周期完全独立于 MCP。
+
+注意:所有全局状态通过惰性初始化获取(get_collection()),
+避免导入时即触发后端连接。
 """
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-import chromadb
+if TYPE_CHECKING:
+    import chromadb
 
 _data_root = os.environ.get("LM_MEM_DATA_DIR") or str(Path.home() / ".lm-mem")
 DB_PATH = os.environ.get("LM_MEM_DB_PATH", str(Path(_data_root) / "chroma"))
 Path(DB_PATH).mkdir(parents=True, exist_ok=True)
 
+_client: "chromadb.ClientAPI | None" = None
+_collection: "chromadb.Collection | None" = None
+
 
 def _connect(host, port):
     """尝试连接后端;连不上返回 None(不抛异常)。"""
     try:
+        import chromadb
         client = chromadb.HttpClient(host=host, port=port)
         client.heartbeat()
         return client
@@ -32,6 +41,7 @@ def _in_pytest():
 
 
 def _embedded_client():
+    import chromadb
     return chromadb.PersistentClient(path=DB_PATH)
 
 
@@ -65,14 +75,29 @@ def _init_client():
     )
 
 
-_client = _init_client()
-_collection = _client.get_or_create_collection(
-    name="memories",
-    metadata={
-        "hnsw:space": "cosine",
-        "hnsw:M": 4,
-        "hnsw:construction_ef": 30,
-        "hnsw:search_ef": 2,
-        "hnsw:num_threads": 20,
-    },
-)
+def _init_collection(client):
+    """从 client 获取或创建 memories 集合。"""
+    return client.get_or_create_collection(
+        name="memories",
+        metadata={
+            "hnsw:space": "cosine",
+            "hnsw:M": 4,
+            "hnsw:construction_ef": 30,
+            "hnsw:search_ef": 2,
+            "hnsw:num_threads": 20,
+        },
+    )
+
+
+def get_collection():
+    """惰性获取 ChromaDB 集合(首次调用时初始化连接)。"""
+    global _client, _collection
+    if _collection is None:
+        _client = _init_client()
+        _collection = _init_collection(_client)
+    return _collection
+
+
+def collection_for_url(url):
+    """为指定后端 URL 构造集合(不走全局缓存,供 MemoryClient(url=...) 用)。"""
+    return _init_collection(_connect_or_raise(url))

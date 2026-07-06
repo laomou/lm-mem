@@ -21,24 +21,26 @@ def srv():
     os.environ["LM_MEM_DB_PATH"] = tmp
     for key in _BACKEND_ENV:
         os.environ.pop(key, None)
-    for mod_name in ("lm_mem.mcp_tools", "lm_mem.backend", "lm_mem.memory_utils", "lm_mem"):
+    for mod_name in ("lm_mem.mcp_tools", "lm_mem.client", "lm_mem.backend", "lm_mem.memory_utils", "lm_mem"):
         sys.modules.pop(mod_name, None)
 
     import lm_mem.backend as _db
     import lm_mem.memory_utils as _hlp
     _db = importlib.reload(_db)
     _hlp = importlib.reload(_hlp)
+    import lm_mem.client as _cl
+    _cl = importlib.reload(_cl)
     import lm_mem.mcp_tools as _mt
     _mt = importlib.reload(_mt)
 
     srv = type("_Srv", (), {})()
     srv.__dict__.update({k: v for k, v in _mt.__dict__.items() if not k.startswith("_")})
     srv.__dict__.update({
-        "_collection": _db._collection,
+        "_collection": _db.get_collection(),
         "_client": _db._client,
         "_connect": _db._connect,
         "_init_client": _db._init_client,
-        "_is_expired": _hlp._is_expired,
+        "_is_expired": _hlp.is_expired,
     })
     yield srv
 

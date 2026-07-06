@@ -15,7 +15,9 @@ import subprocess
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent.parent  # src/lm_mem/ → project root
 PYTHON = os.environ.get("LM_MEM_PYTHON") or sys.executable
@@ -36,134 +38,119 @@ def _w(s):
     print(s, file=sys.stderr)
 
 
-# ── backend ──────────────────────────────────────────
-
-
-def _backend_url(host, port):
-    return f"http://{host}:{port}/api/v2/heartbeat"
-
-
-def _backend_running(host, port):
-    try:
-        urllib.request.urlopen(_backend_url(host, port), timeout=2)
-        return True
-    except Exception:
-        return False
-
-
-def _backend_defaults(host, port):
-    return host or BACKEND_HOST, port or BACKEND_PORT
-
-
-def _backend_start(host=None, port=None):
-    host, port = _backend_defaults(host, port)
-    if _backend_running(host, port):
-        _w(f"后端已在运行:http://{host}:{port}")
-        return
-    _w(f"启动后端 → http://{host}:{port}")
-    DB_PATH = _get_db_path()
-    log = open(str(PID_DIR.parent / "logs" / "backend.log"), "ab")
-    proc = subprocess.Popen(
-        [str(_CHROMA_CMD), "run", "--path", DB_PATH, "--host", host, "--port", str(port)],
-        stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
-    )
-    BACKEND_PID_FILE.write_text(str(proc.pid))
-    for _ in range(60):
-        if _backend_running(host, port):
-            _w(f"后端已就绪 (pid={proc.pid})")
-            return
-        time.sleep(0.5)
-    _w("后端启动超时")
-    sys.exit(1)
-
-
-def _backend_stop(host=None, port=None):
-    if BACKEND_PID_FILE.exists():
-        pid = int(BACKEND_PID_FILE.read_text().strip())
-        try:
-            os.kill(pid, signal.SIGTERM)
-            _w(f"后端已停止 (pid={pid})")
-            BACKEND_PID_FILE.unlink(missing_ok=True)
-            return
-        except ProcessLookupError:
-            BACKEND_PID_FILE.unlink(missing_ok=True)
-    host, port = _backend_defaults(host, port)
-    p = subprocess.run(["pkill", "-f", f"chroma.*run.*--port {port}"], capture_output=True)
-    _w("后端已停止" if p.returncode == 0 else "后端未运行")
-
-
-def _backend_status(host=None, port=None):
-    host, port = _backend_defaults(host, port)
-    if _backend_running(host, port):
-        _w(f"后端运行中:http://{host}:{port}")
-    else:
-        _w("后端未运行")
+# ── 进程托管:backend / web ────────────────────────────
+#
+# 两者都是"托管的外部进程":起一个子进程、写 PID、轮询就绪、
+# 停时先 SIGTERM 再 pkill 兜底。差异只有 5 个维度,收敛进 _Service。
 
 
 def _get_db_path():
     return os.environ.get("LM_MEM_DB_PATH", str(Path(_DATA_ROOT) / "chroma"))
 
 
-# ── web ──────────────────────────────────────────────
+def _backend_spawn(host, port):
+    argv = [str(_CHROMA_CMD), "run", "--path", _get_db_path(),
+            "--host", host, "--port", str(port)]
+    return argv, None  # 无需额外 env
 
 
-def _web_running(host, port):
+def _web_spawn(host, port):
+    argv = [str(PYTHON), str(Path(__file__).parent / "web.py")]
+    env = os.environ.copy()
+    env["LM_MEM_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+    env["LM_MEM_WEB_HOST"] = host
+    env["LM_MEM_WEB_PORT"] = str(port)
+    return argv, env
+
+
+@dataclass(frozen=True)
+class _Service:
+    """一个可托管进程的规格。start/stop/status 的差异全在这里。"""
+    name: str                      # 展示名
+    pid_file: Path                 # PID 落盘路径
+    defaults: tuple                # (host, port) 缺省
+    probe: "Callable[[str, int], str]"   # host,port -> 就绪探测 URL
+    spawn: "Callable[[str, int], tuple]"  # host,port -> (argv, env)
+    pkill: "Callable[[str, int], str]"    # host,port -> pkill -f 模式串
+    wait_ticks: int                # 就绪轮询次数(每次 0.5s)
+
+
+BACKEND = _Service(
+    name="后端",
+    pid_file=BACKEND_PID_FILE,
+    defaults=(BACKEND_HOST, BACKEND_PORT),
+    probe=lambda h, p: f"http://{h}:{p}/api/v2/heartbeat",
+    spawn=_backend_spawn,
+    pkill=lambda h, p: f"chroma.*run.*--port {p}",
+    wait_ticks=60,
+)
+
+WEB = _Service(
+    name="Web UI",
+    pid_file=WEB_PID_FILE,
+    defaults=(WEB_HOST, WEB_PORT),
+    probe=lambda h, p: f"http://{h}:{p}/version",
+    spawn=_web_spawn,
+    pkill=lambda h, p: "python.*web.py",
+    wait_ticks=30,
+)
+
+
+def _resolve(svc, host, port):
+    return host or svc.defaults[0], port or svc.defaults[1]
+
+
+def _running(svc, host, port):
     try:
-        urllib.request.urlopen(f"http://{host}:{port}/version", timeout=2)
+        urllib.request.urlopen(svc.probe(host, port), timeout=2)
         return True
     except Exception:
         return False
 
 
-def _web_defaults(host, port):
-    return host or WEB_HOST, port or WEB_PORT
-
-
-def _web_start(host=None, port=None):
-    host, port = _web_defaults(host, port)
-    if _web_running(host, port):
-        _w(f"Web UI 已在运行:http://{host}:{port}")
+def _start(svc, host=None, port=None):
+    host, port = _resolve(svc, host, port)
+    if _running(svc, host, port):
+        _w(f"{svc.name}已在运行:http://{host}:{port}")
         return
-    _w(f"启动 Web UI → http://{host}:{port}")
-    env = os.environ.copy()
-    env["LM_MEM_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
-    env["LM_MEM_WEB_HOST"] = host
-    env["LM_MEM_WEB_PORT"] = str(port)
+    _w(f"启动{svc.name} → http://{host}:{port}")
+    argv, env = svc.spawn(host, port)
     proc = subprocess.Popen(
-        [str(PYTHON), str(Path(__file__).parent / "web.py")],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL, start_new_session=True, env=env,
     )
-    WEB_PID_FILE.write_text(str(proc.pid))
-    for _ in range(30):
-        if _web_running(host, port):
-            _w(f"Web UI 已就绪 (pid={proc.pid})")
+    svc.pid_file.write_text(str(proc.pid))
+    for _ in range(svc.wait_ticks):
+        if _running(svc, host, port):
+            _w(f"{svc.name}已就绪 (pid={proc.pid})")
             return
         time.sleep(0.5)
-    _w("Web UI 启动超时")
+    _w(f"{svc.name}启动超时")
     sys.exit(1)
 
 
-def _web_stop(_host=None, _port=None):
-    if WEB_PID_FILE.exists():
-        pid = int(WEB_PID_FILE.read_text().strip())
+def _stop(svc, host=None, port=None):
+    host, port = _resolve(svc, host, port)
+    if svc.pid_file.exists():
+        pid = int(svc.pid_file.read_text().strip())
         try:
             os.kill(pid, signal.SIGTERM)
-            _w(f"Web UI 已停止 (pid={pid})")
-            WEB_PID_FILE.unlink(missing_ok=True)
+            _w(f"{svc.name}已停止 (pid={pid})")
+            svc.pid_file.unlink(missing_ok=True)
             return
         except ProcessLookupError:
-            WEB_PID_FILE.unlink(missing_ok=True)
-    p = subprocess.run(["pkill", "-f", "python.*web.py"], capture_output=True)
-    _w("Web UI 已停止" if p.returncode == 0 else "Web UI 未运行")
+            svc.pid_file.unlink(missing_ok=True)
+    p = subprocess.run(["pkill", "-f", svc.pkill(host, port)], capture_output=True)
+    _w(f"{svc.name}已停止" if p.returncode == 0 else f"{svc.name}未运行")
 
 
-def _web_status(host=None, port=None):
-    host, port = _web_defaults(host, port)
-    if _web_running(host, port):
-        _w(f"Web UI 运行中:http://{host}:{port}")
+def _status(svc, host=None, port=None):
+    host, port = _resolve(svc, host, port)
+    if _running(svc, host, port):
+        _w(f"{svc.name}运行中:http://{host}:{port}")
     else:
-        _w("Web UI 未运行")
+        _w(f"{svc.name}未运行")
+
 
 
 # ── mcp ──────────────────────────────────────────────
@@ -200,25 +187,26 @@ def _build_parser():
     return p
 
 
-_HANDLERS = {
-    "backend": {"start": _backend_start, "stop": _backend_stop, "status": _backend_status},
-    "web": {"start": _web_start, "stop": _web_stop, "status": _web_status},
-}
+# 可托管的外部服务:entity 名 → 规格。mcp 不在此列(它是前台运行,见 _run)。
+_SERVICES = {"backend": BACKEND, "web": WEB}
+_ACTIONS = {"start": _start, "stop": _stop, "status": _status}
 
 
 def _run(entity, action, host, port):
+    # mcp:自身即进程,前台阻塞运行,不走进程托管
     if entity == "mcp":
         _mcp_run()
         return
-    if entity not in _HANDLERS:
+    svc = _SERVICES.get(entity)
+    if svc is None:
         _w(f"未知实体:{entity}")
         sys.exit(1)
     if action == "restart":
-        _HANDLERS[entity]["stop"](host, port)
+        _stop(svc, host, port)
         time.sleep(1)
-        _HANDLERS[entity]["start"](host, port)
+        _start(svc, host, port)
     else:
-        _HANDLERS[entity][action](host, port)
+        _ACTIONS[action](svc, host, port)
 
 
 def main():
