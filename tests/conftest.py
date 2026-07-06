@@ -37,7 +37,6 @@ def srv():
     srv.__dict__.update({k: v for k, v in _mt.__dict__.items() if not k.startswith("_")})
     srv.__dict__.update({
         "_collection": _db.get_collection(),
-        "_client": _db._client,
         "_connect": _db._connect,
         "_init_client": _db._init_client,
         "_is_expired": _hlp.is_expired,

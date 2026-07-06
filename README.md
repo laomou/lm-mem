@@ -16,6 +16,9 @@ lm-mem backend start
 
 # MCP Server (stdio)
 lm-mem mcp
+
+# Web 台(只读,浏览器查看/检索记忆)
+lm-mem web start
 ```
 
 ## MCP 客户端配置
@@ -48,7 +51,25 @@ lm-mem mcp
 ## 作为库使用
 
 ```python
-from lm_mem.backend import _collection
-from lm_mem.memory_utils import _hits_to_records, _scope_where
-from lm_mem.mcp_tools import search_memories, add_memory
+from lm_mem import MemoryClient
+
+client = MemoryClient()                 # 用共享后端(由 LM_MEM_BACKEND_URL 决定)
+# client = MemoryClient(url="http://127.0.0.1:8901")  # 或显式指定后端
+
+# 保存(同作用域内内容高度相似会自动查重;force=True 跳过)
+client.add("用户偏好 pytest", user_id="u1")
+client.add(messages=[{"role": "user", "content": "I like cats"}], user_id="u1")
+
+# 语义检索
+for r in client.search("测试框架偏好", user_id="u1")["items"]:
+    print(r["content"], r["similarity"])
+
+# 查看 / 更新 / 删除
+client.get("mem-id-xxx")
+client.update("mem-id-xxx", content="新内容")
+client.delete("mem-id-xxx")
 ```
+
+方法一览:`add` / `search` / `get` / `list` / `update` / `delete` / `delete_all`
+/ `delete_entity` / `list_entities` / `stats` / `get_user_context` / `export`
+/ `import_data` / `purge_expired`。

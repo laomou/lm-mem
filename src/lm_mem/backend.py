@@ -21,7 +21,6 @@ _data_root = os.environ.get("LM_MEM_DATA_DIR") or str(Path.home() / ".lm-mem")
 DB_PATH = os.environ.get("LM_MEM_DB_PATH", str(Path(_data_root) / "chroma"))
 Path(DB_PATH).mkdir(parents=True, exist_ok=True)
 
-_client: "chromadb.ClientAPI | None" = None
 _collection: "chromadb.Collection | None" = None
 
 
@@ -91,10 +90,9 @@ def _init_collection(client):
 
 def get_collection():
     """惰性获取 ChromaDB 集合(首次调用时初始化连接)。"""
-    global _client, _collection
+    global _collection
     if _collection is None:
-        _client = _init_client()
-        _collection = _init_collection(_client)
+        _collection = _init_collection(_init_client())
     return _collection
 
 

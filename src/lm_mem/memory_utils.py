@@ -98,13 +98,12 @@ def messages_to_text(messages):
     if not isinstance(arr, list):
         raise ValueError("messages 必须是 JSON 数组。")
     parts = []
-    for m in arr:
-        if isinstance(m, dict):
-            role = m.get("role", "?")
-            content = m.get("content", "")
-            parts.append(f"{role}: {content}")
-        else:
-            parts.append(str(m))
+    for i, m in enumerate(arr):
+        if not isinstance(m, dict):
+            raise ValueError(f"messages[{i}] 必须是对象(含 role 和 content)。")
+        if "role" not in m or "content" not in m:
+            raise ValueError(f"messages[{i}] 缺少 role 或 content 字段。")
+        parts.append(f"{m['role']}: {m['content']}")
     return "\n".join(parts).strip()
 
 

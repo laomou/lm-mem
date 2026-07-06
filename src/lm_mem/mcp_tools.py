@@ -327,19 +327,3 @@ def import_memories(
     return _dumps(_client.import_data(
         data, fmt=fmt, overwrite=overwrite, new_ids=new_ids,
     ))
-
-
-def _run():
-    """MCP 入口,供 uvx / pipx 调用。
-
-    启动 stdio 模式的 MCP server,客户端通过 stdio 与 LM 对话。
-    BACKEND_URL 默认 127.0.0.1:8901,可通过 LM_MEM_BACKEND_PORT 改端口。
-    """
-    import os as _os
-    backend_host = _os.environ.get("LM_MEM_BACKEND_HOST", "127.0.0.1")
-    backend_port = _os.environ.get("LM_MEM_BACKEND_PORT", "8901")
-    _os.environ.setdefault(
-        "LM_MEM_BACKEND_URL",
-        f"http://{backend_host}:{backend_port}",
-    )
-    mcp.run()
