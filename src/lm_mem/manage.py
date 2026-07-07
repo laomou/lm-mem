@@ -55,7 +55,10 @@ def _backend_spawn(host, port):
 
 
 def _web_spawn(host, port):
-    argv = [str(PYTHON), str(Path(__file__).parent / "web.py")]
+    # argv 末尾附一个纯标记(web.main 从 env 读配置、不解析 argv),
+    # 使进程 cmdline 里带端口,pkill / pid 身份校验都能精确识别本服务。
+    argv = [str(PYTHON), str(Path(__file__).parent / "web.py"),
+            f"--lm-mem-web-port={port}"]
     env = os.environ.copy()
     env["LM_MEM_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
     env["LM_MEM_WEB_HOST"] = host
@@ -91,7 +94,7 @@ WEB = _Service(
     defaults=(WEB_HOST, WEB_PORT),
     probe=lambda h, p: f"http://{h}:{p}/version",
     spawn=_web_spawn,
-    pkill=lambda h, p: "python.*web.py",
+    pkill=lambda h, p: f"web.py --lm-mem-web-port={p}",
     wait_ticks=30,
 )
 
@@ -129,17 +132,35 @@ def _start(svc, host=None, port=None):
     sys.exit(1)
 
 
+def _pid_is(svc, pid, host, port):
+    """校验 pid 当前确实是本服务(防 pid 被系统复用后误杀)。
+
+    读 /proc/<pid>/cmdline,匹配该服务 pkill 特征串的关键片段。
+    读不到(非 Linux / 无 procfs)时返回 True,退回原有信任 PID 文件的行为。
+    """
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode(errors="ignore")
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return True  # 无 procfs,无法校验,退回信任
+    # pkill 模式里的端口特征就是最可靠的身份标记
+    return f"--lm-mem-web-port={port}" in cmdline if svc is WEB else f"--port {port}" in cmdline
+
+
 def _stop(svc, host=None, port=None):
     host, port = _resolve(svc, host, port)
     if svc.pid_file.exists():
         pid = int(svc.pid_file.read_text().strip())
-        try:
-            os.kill(pid, signal.SIGTERM)
-            _w(f"{svc.name}已停止 (pid={pid})")
-            svc.pid_file.unlink(missing_ok=True)
-            return
-        except ProcessLookupError:
-            svc.pid_file.unlink(missing_ok=True)
+        if _pid_is(svc, pid, host, port):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                _w(f"{svc.name}已停止 (pid={pid})")
+                svc.pid_file.unlink(missing_ok=True)
+                return
+            except ProcessLookupError:
+                pass
+        svc.pid_file.unlink(missing_ok=True)  # pid 已失效或身份不符,清掉陈旧 PID 文件
     p = subprocess.run(["pkill", "-f", svc.pkill(host, port)], capture_output=True)
     _w(f"{svc.name}已停止" if p.returncode == 0 else f"{svc.name}未运行")
 
