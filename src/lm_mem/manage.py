@@ -184,6 +184,10 @@ def _build_parser():
         ep = sub.add_parser(entity, parents=[conn], help=f"{entity} 管理")
         ep.add_argument("action", nargs="?", default="status",
                         choices=["start", "stop", "restart", "status"])
+
+    sub.add_parser("skill", help="把 lm-mem 触发段落写入已检测到的 agent 规则文件") \
+        .add_argument("action", nargs="?", default="status",
+                      choices=["install", "uninstall", "status"])
     return p
 
 
@@ -196,6 +200,12 @@ def _run(entity, action, host, port):
     # mcp:自身即进程,前台阻塞运行,不走进程托管
     if entity == "mcp":
         _mcp_run()
+        return
+    if entity == "skill":
+        from lm_mem import skill_install
+        {"install": skill_install.install,
+         "uninstall": skill_install.uninstall,
+         "status": skill_install.status}[action]()
         return
     svc = _SERVICES.get(entity)
     if svc is None:

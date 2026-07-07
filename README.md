@@ -21,6 +21,28 @@ lm-mem mcp
 lm-mem web start
 ```
 
+## 装入 agent 规则文件
+
+`lm-mem skill install` 把一段常驻触发规则写进已安装 agent 的规则文件，
+让 agent 知道**何时**该调用记忆工具（完整策略见 skill 的 SKILL.md）。
+
+自动检测下列 agent 的配置目录，装了几个写几个：
+
+| agent | 检测目录 | 写入文件 |
+|---|---|---|
+| Claude Code | `~/.claude/` | `CLAUDE.md` |
+| Codex | `~/.codex/` | `AGENTS.md` |
+| opencode | `~/.config/opencode/` | `AGENTS.md` |
+| OpenClaw | `~/.openclaw/` | `AGENTS.md` |
+
+```bash
+lm-mem skill install      # 检测并写入(幂等，可重复执行以同步最新版本)
+lm-mem skill status       # 查看各文件安装状态
+lm-mem skill uninstall    # 移除写入的段落
+```
+
+写入内容用 `<!-- lm-mem:begin -->…<!-- lm-mem:end -->` 包裹，不影响文件其余部分。
+
 ## MCP 客户端配置
 
 ```json
