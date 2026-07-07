@@ -15,7 +15,7 @@
     results = client.search("测试框架", user_id="u1")
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from lm_mem.client import MemoryClient
 
