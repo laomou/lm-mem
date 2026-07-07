@@ -334,7 +334,11 @@ class MemoryClient:
         user_id: str = "",
         limit: int = 10,
     ) -> dict:
-        """获取用户核心上下文（偏好/身份/环境）。"""
+        """获取用户核心上下文（偏好/身份/环境）。
+
+        user_id 为空时只返回**无 user_id 归属的全局记忆**，不会串出其他用户的
+        画像（防跨用户泄露）；传了 user_id 则限定该用户。
+        """
         where_scope = scope_where(user_id, "", "", "")
         core_categories = ("preference", "identity", "environment")
         now = time.time()
@@ -352,6 +356,10 @@ class MemoryClient:
             res = self._col().get(where=where, include=["documents", "metadatas"])
             for mem_id, doc, meta in zip(res["ids"], res["documents"], res["metadatas"]):
                 if mem_id in seen_ids or is_expired(meta, now):
+                    continue
+                # 未指定 user_id 时,排除任何带 user_id 归属的记忆,只留全局记忆,
+                # 避免无作用域查询把其他用户的画像一并返回。
+                if not user_id and (meta or {}).get("user_id"):
                     continue
                 seen_ids.add(mem_id)
                 all_hits.append((mem_id, doc, meta or {}))

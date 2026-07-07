@@ -158,3 +158,14 @@ def test_get_user_context_respects_user_scope(srv):
     cs = contents(ctx["items"])
     assert any("u1" in c for c in cs)
     assert not any("u2" in c for c in cs)
+
+
+def test_get_user_context_empty_user_id_excludes_others(srv):
+    # 无 user_id 时只返回全局记忆,不得串出任何用户的画像
+    srv.add_memory(content="alice 偏好", user_id="alice",
+                   metadata=json.dumps({"category": "preference"}))
+    srv.add_memory(content="全局约定", metadata=json.dumps({"category": "preference"}))
+    ctx = r(srv.get_user_context())  # 不传 user_id
+    cs = contents(ctx["items"])
+    assert any("全局" in c for c in cs)          # 全局记忆保留
+    assert not any("alice" in c for c in cs)     # 他人画像不泄露
