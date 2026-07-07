@@ -133,7 +133,7 @@ def memory_to_record(mem_id, doc, meta):
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
         "expires_at": meta.get("expires_at"),
-        "scope": {k: meta[k] for k in SCOPE_KEYS if k in meta},
+        "scope": {k: meta[k] for k in SCOPE_KEYS if meta.get(k)},
         "metadata": user_metadata(meta),
     }
 

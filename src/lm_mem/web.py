@@ -24,19 +24,24 @@ import json
 import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
-
-from lm_mem import backend as _db
+from urllib.parse import parse_qs, urlparse, urlencode
 
 from lm_mem import memory_utils as _hlp
 from lm_mem import web_assets
+from lm_mem.client import MemoryClient
 
 _VERSION = "0.3.0"
+
+# 复用 MemoryClient(单例),不再自建 Chroma 读写路径。
+_client = MemoryClient()
+
+
 def _delete_fn(mem_id):
-    """删除单条记忆(直接调 Chroma,不依赖 MCP 工具层)。"""
-    if not _db.get_collection().get(ids=[mem_id])["ids"]:
+    """删除单条记忆(委托 MemoryClient,统一数据路径)。"""
+    try:
+        _client.delete(mem_id)
+    except ValueError:
         return json.dumps({"ok": False, "message": f"未找到 id={mem_id} 的记忆。"})
-    _db.get_collection().delete(ids=[mem_id])
     return json.dumps({"ok": True, "id": mem_id, "message": f"已删除 id={mem_id}"})
 
 _HOST = "127.0.0.1"
@@ -62,60 +67,20 @@ def _fmt_ts_short(ts):
         return str(ts)
 
 
-def _record(mem_id, doc, meta):
-    """把一条记忆整理成可序列化的 dict。"""
-    meta = meta or {}
-    rec = {
-        "id": mem_id,
-        "content": doc,
-        "tags": meta.get("tags", "") or "",
-        "created_at": meta.get("created_at"),
-        "updated_at": meta.get("updated_at"),
-        "expires_at": meta.get("expires_at"),
-        "scope": {k: meta[k] for k in _hlp.SCOPE_KEYS if meta.get(k)},
-        "metadata": _hlp.user_metadata(meta),
-    }
-    return rec
-
-
 def _list_records(user_id="", agent_id="", app_id="", run_id=""):
-    where = _hlp.scope_where(user_id, agent_id, app_id, run_id)
-    res = _db.get_collection().get(
-        where=where, include=["documents", "metadatas"]
-    )
-    now = time.time()
-    records = []
-    for mem_id, doc, meta in zip(res["ids"], res["documents"], res["metadatas"]):
-        if _hlp.is_expired(meta, now):
-            continue
-        records.append(_record(mem_id, doc, meta))
+    # limit 取大值:Web 列表页自行分页,这里要拿到该作用域下的全部记录。
+    res = _client.list(limit=1_000_000, user_id=user_id, agent_id=agent_id,
+                       app_id=app_id, run_id=run_id)
+    records = res["items"]
     # 新创建的靠前
     records.sort(key=lambda r: r["created_at"] or 0, reverse=True)
     return records
 
 
 def _search_records(query, user_id="", agent_id="", app_id="", run_id="", limit=20):
-    if _db.get_collection().count() == 0:
-        return []
-    clauses = _hlp.clauses(user_id, agent_id, app_id, run_id)
-    where = _hlp.combine(clauses)
-    n = min(_db.get_collection().count(), max(limit * _hlp.OVERFETCH, limit + 10))
-    res = _db.get_collection().query(query_texts=[query], n_results=n, where=where)
-    now = time.time()
-    out = []
-    if not res["ids"] or not res["ids"][0]:
-        return out
-    for mem_id, doc, meta, dist in zip(
-        res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0]
-    ):
-        if _hlp.is_expired(meta, now):
-            continue
-        rec = _record(mem_id, doc, meta)
-        rec["similarity"] = round(1 - dist, 3)
-        out.append(rec)
-        if len(out) >= limit:
-            break
-    return out
+    res = _client.search(query, limit=limit, user_id=user_id, agent_id=agent_id,
+                        app_id=app_id, run_id=run_id)
+    return res["items"]
 
 
 def _esc(s):
@@ -137,6 +102,9 @@ def _del_form(mem_id, inline=False, confirm_msg=None):
 
 
 _PAGE_SIZE = 30
+# 搜索展示上限:语义检索是 top-N,取一个足够大的值,使列表页分页有意义、
+# 顶部计数不被 20 静默截断(旧行为搜索最多 20 条、永远只有 1 页)。
+_SEARCH_LIMIT = 200
 
 
 def _scope_inputs(scope_vals):
@@ -217,9 +185,11 @@ def _render_list(records, scope_vals, q="", page=1, notice=None):
             f'<tbody>{"".join(rows)}</tbody></table></div>'
         )
 
-    base = "?" + "&".join(
-        f"{k}={_esc(scope_vals.get(k, '') or '')}" for k in _hlp.SCOPE_KEYS
-    ) + f"&q={_esc(q)}"
+    # query string 用 URL 编码(不是 HTML 转义),避免 scope 值/关键词含
+    # & 空格 # = 时链接参数错位。href 属性再由模板整体转义。
+    params = [(k, scope_vals.get(k, "") or "") for k in _hlp.SCOPE_KEYS]
+    params.append(("q", q))
+    base = "?" + urlencode(params)
     pager = _pager(base, page, total_pages)
 
     notice_html = ""
@@ -362,17 +332,17 @@ class _Handler(BaseHTTPRequestHandler):
     def _local_origin_ok(self):
         """同源校验:仅允许本机 origin 的写请求,挡掉跨站 CSRF。
 
-        浏览器表单会带 Referer;fetch 带 Origin。两者都空时(如 curl)
+        解析 Origin/Referer 的 host:port 与本机 Host **精确相等**才放行,
+        避免 http://<host>.evil.com 这类子串绕过。两者都空时(如 curl)
         放行——工具本就是本机脚本可用。
         """
-        origin = (self.headers.get("Origin") or "").strip()
-        referer = (self.headers.get("Referer") or "").strip()
         host = self.headers.get("Host", "")
-        for val in (origin, referer):
+        for header in ("Origin", "Referer"):
+            val = (self.headers.get(header) or "").strip()
             if not val:
                 continue
-            # 形如 http://127.0.0.1:7531/... ,Host 必须出现在值里
-            if host and host not in val:
+            netloc = urlparse(val).netloc
+            if netloc != host:
                 return False
         return True
 
@@ -439,7 +409,7 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/list" or path == "/":
                 sv = self._scope_from_qs(qs)
                 q = qs.get("q", [""])[0].strip()
-                records = (_search_records(q, **sv) if q
+                records = (_search_records(q, limit=_SEARCH_LIMIT, **sv) if q
                            else _list_records(**sv))
                 if path == "/api/list":
                     return self._send(200, json.dumps({"ok": True, "count": len(records),
@@ -458,7 +428,7 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/search":
                 q = qs.get("q", [""])[0].strip()
                 sv = self._scope_from_qs(qs)
-                items = _search_records(q, **sv)
+                items = _search_records(q, limit=_SEARCH_LIMIT, **sv)
                 return self._send(
                     200, json.dumps({"ok": True, "count": len(items),
                                      "items": items, "message": f"搜索到 {len(items)} 条"},
@@ -468,7 +438,7 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/search":
                 q = qs.get("q", [""])[0].strip()
                 sv = self._scope_from_qs(qs)
-                return self._send(200, _render_search(_search_records(q, **sv), q))
+                return self._send(200, _render_search(_search_records(q, limit=_SEARCH_LIMIT, **sv), q))
 
             if path.startswith("/api/mem/"):
                 mid = path[len("/api/mem/"):]
@@ -485,12 +455,14 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _get_one(mem_id):
-    res = _db.get_collection().get(ids=[mem_id], include=["documents", "metadatas"])
-    if not res["ids"]:
+    """取单条记忆;不存在或已过期返回 None(供详情页/JSON 用)。"""
+    try:
+        rec = _client.get(mem_id)
+    except ValueError:
         return None
-    if _hlp.is_expired(res["metadatas"][0]):
+    if _hlp.is_expired({"expires_at": rec.get("expires_at")}):
         return None
-    return _record(res["ids"][0], res["documents"][0], res["metadatas"][0])
+    return rec
 
 
 def main() -> None:

@@ -75,3 +75,55 @@ def test_bad_metadata_rejected(srv):
         srv.add_memory(content="x", metadata="not-json")
     with pytest.raises(ValueError):
         srv.add_memory(content="x", metadata="[1,2,3]")  # 非对象
+
+
+# ── entities ─────────────────────────────────────────
+
+
+def test_list_entities_groups_by_scope(srv):
+    srv.add_memory(content="a", user_id="u1")
+    srv.add_memory(content="b", user_id="u2", force=True)
+    srv.add_memory(content="c", app_id="proj1", force=True)
+    ents = r(srv.list_entities())["entities"]
+    assert set(ents["user_id"]) == {"u1", "u2"}
+    assert ents["app_id"] == ["proj1"]
+    # 只取一类
+    only = r(srv.list_entities("user"))["entities"]
+    assert set(only["user_id"]) == {"u1", "u2"}
+    assert "app_id" not in only
+
+
+def test_list_entities_bad_type_raises(srv):
+    with pytest.raises(ValueError):
+        srv.list_entities("bogus")
+
+
+def test_delete_entities_removes_and_validates(srv):
+    srv.add_memory(content="a", user_id="u1")
+    srv.add_memory(content="b", user_id="u1", force=True)
+    out = r(srv.delete_entities("user", "u1"))
+    assert out["deleted"] == 2
+    # 非法 entity_type
+    with pytest.raises(ValueError):
+        srv.delete_entities("bogus", "u1")
+    # 未找到实体
+    with pytest.raises(ValueError, match="未找到"):
+        srv.delete_entities("user", "ghost")
+
+
+# ── messages 严格校验 ─────────────────────────────────
+
+
+def test_messages_must_be_array(srv):
+    with pytest.raises(ValueError, match="数组|JSON"):
+        srv.add_memory(messages=json.dumps({"role": "user", "content": "x"}))  # 对象非数组
+
+
+def test_messages_element_missing_field(srv):
+    with pytest.raises(ValueError, match="role|content"):
+        srv.add_memory(messages=json.dumps([{"role": "user"}]))  # 缺 content
+
+
+def test_messages_element_not_dict(srv):
+    with pytest.raises(ValueError, match="对象"):
+        srv.add_memory(messages=json.dumps(["just a string"]))
