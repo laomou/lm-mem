@@ -92,6 +92,35 @@ export LM_MEM_BACKEND_PORT=9000
 lm-mem backend start && lm-mem web start   # web 会连到 9000
 ```
 
+## 常驻部署
+
+`lm-mem backend start` 只是起一次子进程,**没有自动重启**:后端被 OOM / 崩溃 /
+机器重启带走后不会自愈,下一次记忆调用会连接失败。要真正"跨会话持久",把进程
+监管交给 OS。systemd 用户级示例:
+
+```ini
+# ~/.config/systemd/user/lm-mem.service
+[Unit]
+Description=lm-mem backend
+
+[Service]
+# 直接跑 chroma,不经 manage.py 的一次性包装(让 systemd 自己管生命周期)
+ExecStart=%h/.local/bin/chroma run --path %h/.lm-mem/chroma --host 127.0.0.1 --port 8901
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now lm-mem
+loginctl enable-linger "$USER"   # 未登录时也保持运行
+```
+
+> `lm-mem <svc> stop` 现在会等进程真正退出(SIGTERM 后确认,超时才 SIGKILL),
+> 所以 `restart` 不会撞上"旧进程还占着端口"。但自愈仍需上面的 systemd/supervisor。
+
 ## 作为库使用
 
 ```python
