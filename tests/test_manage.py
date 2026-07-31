@@ -6,6 +6,7 @@
 import dataclasses
 import importlib
 import os
+import sys
 
 import pytest
 
@@ -171,3 +172,47 @@ def test_auto_purge_never_blocks_startup(monkeypatch, capsys):
     m._auto_purge()          # 不得抛异常
     assert "跳过过期清理" in capsys.readouterr().err
     importlib.reload(b)
+
+
+# ── chroma 可执行文件解析(finding #1) ─────────────────
+#
+# 从 PyPI 装、不激活 venv 时 `lm-mem backend start` 会 FileNotFoundError:
+# _backend_spawn 用裸 "chroma" 靠 PATH,而 chroma 装在 venv/bin 里。
+# 所有单测都跑在 LM_MEM_EMBEDDED=1 下、从不起 chroma CLI,故此前无覆盖。
+
+
+def test_resolve_chroma_prefers_sys_executable_dir(tmp_path, monkeypatch):
+    """chroma 与 sys.executable 同目录时,用它的绝对路径(不靠 PATH)。"""
+    (tmp_path / "chroma").write_text("")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.delenv("LM_MEM_CHROMA", raising=False)
+    m = _manage()
+    assert m._resolve_chroma() == str(tmp_path / "chroma")
+
+
+def test_resolve_chroma_env_override_wins(tmp_path, monkeypatch):
+    """LM_MEM_CHROMA 显式覆盖优先于同目录探测。"""
+    (tmp_path / "chroma").write_text("")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setenv("LM_MEM_CHROMA", "/opt/chroma")
+    m = _manage()
+    assert m._resolve_chroma() == "/opt/chroma"
+
+
+def test_resolve_chroma_falls_back_to_bare(tmp_path, monkeypatch):
+    """同目录没有 chroma 时退回裸命令,靠 PATH(保持老行为)。"""
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))  # 旁边无 chroma
+    monkeypatch.delenv("LM_MEM_CHROMA", raising=False)
+    m = _manage()
+    assert m._resolve_chroma() == "chroma"
+
+
+def test_backend_spawn_uses_resolved_chroma(tmp_path, monkeypatch):
+    """_backend_spawn 的 argv[0] 应是解析后的路径,而非永远裸 'chroma'。"""
+    (tmp_path / "chroma").write_text("")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.delenv("LM_MEM_CHROMA", raising=False)
+    m = _manage()
+    argv, _ = m._backend_spawn("127.0.0.1", 8901)
+    assert argv[0] == str(tmp_path / "chroma")
+    assert argv[1] == "run"

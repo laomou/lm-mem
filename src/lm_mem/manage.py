@@ -20,7 +20,28 @@ from pathlib import Path
 from typing import Callable
 
 PYTHON = os.environ.get("LM_MEM_PYTHON") or sys.executable
-_CHROMA_CMD = os.environ.get("LM_MEM_CHROMA") or "chroma"
+
+
+def _resolve_chroma() -> str:
+    """chroma 可执行文件路径。
+
+    chromadb 是 lm-mem 的依赖,`chroma` 一定和 sys.executable 装在同一个 venv 的
+    bin 目录。优先用那个绝对路径 —— 这样即使没激活 venv、用绝对路径调 lm-mem、
+    或 PATH 里根本没有那个 bin 目录(uvx 等场景),也能起后端。找不到再退回裸
+    "chroma" 靠 PATH。LM_MEM_CHROMA 可显式覆盖(如指向系统级/容器内的 chroma)。
+
+    (web.py 已经用 sys.executable 起 web 进程,这里对 chroma 做同样的事。)
+    """
+    if cmd := os.environ.get("LM_MEM_CHROMA"):
+        return cmd
+    bindir = Path(sys.executable).parent
+    for name in ("chroma", "chroma.exe"):
+        if (bindir / name).exists():
+            return str(bindir / name)
+    return "chroma"
+
+
+_CHROMA_CMD = _resolve_chroma()
 _DATA_ROOT = os.environ.get("LM_MEM_DATA_DIR") or str(Path.home() / ".lm-mem")
 PID_DIR = Path(_DATA_ROOT) / "pids"
 PID_DIR.mkdir(parents=True, exist_ok=True)

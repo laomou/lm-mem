@@ -81,6 +81,7 @@ lm-mem skill uninstall --platform claude                   # 只从 Claude 移�
 | `LM_MEM_AUTO_PURGE` | `1` | `lm-mem mcp` 启动时清一次过期记忆;`=0` 关闭(仍可手动调 `purge_expired`) |
 | `LM_MEM_DATA_DIR` | `~/.lm-mem` | 数据根目录 |
 | `LM_MEM_DB_PATH` | `$LM_MEM_DATA_DIR/chroma` | 数据库路径 |
+| `LM_MEM_CHROMA` | (自动) | `backend start` 用的 chroma 可执行文件;默认取 `sys.executable` 同目录,找不到再靠 PATH。仅在 chroma 装在别处时才需显式指定 |
 | `LM_MEM_WEB_HOST` | `127.0.0.1` | Web UI 绑定地址 |
 | `LM_MEM_WEB_PORT` | `7531` | Web UI 端口 |
 
