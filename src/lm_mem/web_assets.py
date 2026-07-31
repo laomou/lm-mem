@@ -224,7 +224,9 @@ DRAWER_JS = r"""
       +(mdKeys.length?('<div class="d-section">元数据</div><div class="d-content">'+esc(mdJson)+'</div>'):'<div class="d-section">元数据</div><span class="muted">—</span>')
     // 底部删除按钮
     ft.hidden=false;
-    ft.innerHTML='<form method="post" action="/mem/'+esc(mid)+'/delete" '
+    // action 是 URL 路径:必须 encodeURIComponent(它的输出天然是属性安全的),
+    // 用 esc() 只做 HTML 转义会让含 & / 的 id 指向错误路径。
+    ft.innerHTML='<form method="post" action="/mem/'+encodeURIComponent(mid)+'/delete" '
       +'onsubmit="return confirm(\'确认删除?不可撤销。\')">'
       +'<button type="submit" class="danger" style="width:100%">🗑 删除这条记忆</button>'
       +'</form>';
@@ -234,7 +236,9 @@ DRAWER_JS = r"""
     if(e.metaKey||e.ctrlKey||e.shiftKey||e.button!==0)return;
     var a=e.target.closest('a.mem-link');
     var tr=e.target.closest('tr[data-mid]');
-    if(a){e.preventDefault();open(a.getAttribute('href').slice(5));return;}
+    // 一律读 data-mid(原始 id),不从 href 里切——href 是百分号编码过的,
+    // 切出来还要再解码一次,容易和 encodeURIComponent 叠成双重编码。
+    if(a){e.preventDefault();open(a.getAttribute('data-mid'));return;}
     if(tr){e.preventDefault();open(tr.getAttribute('data-mid'));return;}
   });
   ov.addEventListener('click',close);

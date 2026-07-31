@@ -1,10 +1,11 @@
 """lm-mem Web 记忆。
 
-基于标准库 http.server,零额外依赖。仅本机访问,用于在浏览器里
-查看/检索已保存的记忆,并支持按 id 删除单条(需二次确认)。
+基于标准库 http.server,零额外依赖。默认只绑 127.0.0.1,用于在浏览器里
+查看/检索已保存的记忆,**并可按 id 删除单条**(需二次确认 + 同源校验)。
+注意:本服务可写,不是只读面板——开放到非本机地址前请自行评估。
 
 启动:
-    uv run python -m web.py or LM_MEM_WEB_PORT=8080 uv run python web.py
+    lm-mem web start   或   LM_MEM_WEB_PORT=8080 python -m lm_mem.web
     # 默认 http://127.0.0.1:7531
 
 路由:
@@ -24,13 +25,12 @@ import json
 import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse, urlencode
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlencode
 
+from lm_mem import __version__ as _VERSION
 from lm_mem import memory_utils as _hlp
 from lm_mem import web_assets
 from lm_mem.client import MemoryClient
-
-_VERSION = "0.3.0"
 
 # 复用 MemoryClient(单例),不再自建 Chroma 读写路径。
 _client = MemoryClient()
@@ -41,8 +41,8 @@ def _delete_fn(mem_id):
     try:
         _client.delete(mem_id)
     except ValueError:
-        return json.dumps({"ok": False, "message": f"未找到 id={mem_id} 的记忆。"})
-    return json.dumps({"ok": True, "id": mem_id, "message": f"已删除 id={mem_id}"})
+        return {"ok": False, "message": f"未找到 id={mem_id} 的记忆。"}
+    return {"ok": True, "id": mem_id, "message": f"已删除 id={mem_id}"}
 
 _HOST = "127.0.0.1"
 _PORT = 7531
@@ -87,15 +87,30 @@ def _esc(s):
     return html.escape(str(s) if s is not None else "")
 
 
+def _mem_href(mem_id, suffix=""):
+    """记忆 id 拼进 URL 路径。
+
+    id 不保证是 uuid(import_memories 可指定任意字符串),含 / & % 空格时
+    必须百分号编码,否则链接指向的路径和真实 id 对不上——服务端拿到的是
+    未解码的原始路径段,结果是这条记忆在 Web 台上既打不开也删不掉。
+    """
+    return f"/mem/{quote(str(mem_id), safe='')}{suffix}"
+
+
 def _del_form(mem_id, inline=False, confirm_msg=None):
     """删除单条的 POST 表单。浏览器提交,服务端 303 跳回 /。"""
     msg = confirm_msg or f"确认删除记忆 {mem_id[:8]}…?此操作不可撤销。"
     btn_cls = "del-inline" if inline else "danger"
     btn_txt = "🗑 删除" if inline else "🗑 删除这条记忆"
+    # onsubmit 是 **JS 上下文**:必须先用 json.dumps 生成合法 JS 字面量,再整体
+    # HTML 转义。只做 html.escape 是不够的——浏览器先解实体再解析 JS,`&#x27;`
+    # 会还原成 `'` 并提前闭合字符串(id 可由 import_memories 指定,例如
+    # `');x()//` 就能注入代码 / 让 onsubmit 编译失败从而跳过确认框)。
+    confirm_js = _esc(json.dumps(msg, ensure_ascii=False))
     return (
-        f'<form method="post" action="/mem/{_esc(mem_id)}/delete" '
+        f'<form method="post" action="{_esc(_mem_href(mem_id, "/delete"))}" '
         f'class="{"actions" if not inline else ""}" '
-        f'onsubmit="return confirm(\'{_esc(msg)}\')">'
+        f'onsubmit="return confirm({confirm_js})">'
         f'<button type="submit" class="{btn_cls}">{btn_txt}</button>'
         f"</form>"
     )
@@ -164,7 +179,8 @@ def _render_list(records, scope_vals, q="", page=1, notice=None):
         ent_html = f'<td class="entities">{ent}</td>'
         # 内容(点击进抽屉)
         content_html = (
-            f'<td class="content"><a class="mem-link" href="/mem/{_esc(r["id"])}">'
+            f'<td class="content"><a class="mem-link" data-mid="{_esc(r["id"])}" '
+            f'href="{_esc(_mem_href(r["id"]))}">'
             f'{_esc(r["content"])}</a></td>'
         )
         # 分类(tags + metadata.category)
@@ -272,7 +288,7 @@ def _render_search(records, q):
     else:
         rows = "".join(
             f'<tr><td><span class="sim" style="display:inline-block">{r["similarity"]:.2f}</span></td>'
-            f'<td><a href="/mem/{_esc(r["id"])}">{_esc(r["content"][:80])}</a></td>'
+            f'<td><a href="{_esc(_mem_href(r["id"]))}">{_esc(r["content"][:80])}</a></td>'
             f'<td><span class="scope">{_esc(" ".join(f"{k}={v}" for k,v in r["scope"].items()) or "—")}</span></td></tr>'
             for r in records
         )
@@ -356,16 +372,16 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         if path.startswith("/api/mem/") and path.endswith("/delete"):
-            mid = path[len("/api/mem/"):-len("/delete")]
+            mid = unquote(path[len("/api/mem/"):-len("/delete")])
         elif path.startswith("/api/mem/"):
-            mid = path[len("/api/mem/"):]
+            mid = unquote(path[len("/api/mem/"):])
         else:
             return self._send(404, json.dumps({"error": "not found"}),
                               "application/json; charset=utf-8")
         if not self._local_origin_ok():
             return self._send(403, json.dumps({"error": "forbidden origin"}),
                               "application/json; charset=utf-8")
-        result = json.loads(_delete_fn(mid))
+        result = _delete_fn(mid)
         code = 200 if result["ok"] else 404
         return self._send(code, json.dumps(result, ensure_ascii=False),
                           "application/json; charset=utf-8")
@@ -377,9 +393,9 @@ class _Handler(BaseHTTPRequestHandler):
         mid = None
         api = False
         if path.startswith("/mem/") and path.endswith("/delete"):
-            mid = path[len("/mem/"):-len("/delete")]
+            mid = unquote(path[len("/mem/"):-len("/delete")])
         elif path.startswith("/api/mem/") and path.endswith("/delete"):
-            mid = path[len("/api/mem/"):-len("/delete")]
+            mid = unquote(path[len("/api/mem/"):-len("/delete")])
             api = True
         if mid is None:
             return self._send(404, json.dumps({"error": "not found"}),
@@ -387,14 +403,17 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._local_origin_ok():
             return self._send(403, json.dumps({"error": "forbidden origin"}),
                               "application/json; charset=utf-8")
-        result = json.loads(_delete_fn(mid))
+        result = _delete_fn(mid)
         ok = result["ok"]
         if api:
             return self._send(200 if ok else 404,
                               json.dumps(result, ensure_ascii=False),
                               "application/json; charset=utf-8")
-        # 浏览器表单:跳回列表,带结果提示
-        return self._redirect(f"/?deleted={1 if ok else 0}&id={_esc(mid[:8])}")
+        # 浏览器表单:跳回列表,带结果提示。查询串用 urlencode(不是 HTML 转义),
+        # 否则 id 里的 & = # 会让参数错位。
+        return self._redirect(
+            "/?" + urlencode({"deleted": 1 if ok else 0, "id": mid[:8]})
+        )
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -441,12 +460,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, _render_search(_search_records(q, limit=_SEARCH_LIMIT, **sv), q))
 
             if path.startswith("/api/mem/"):
-                mid = path[len("/api/mem/"):]
+                mid = unquote(path[len("/api/mem/"):])
                 return self._send(200, json.dumps(_get_one(mid), ensure_ascii=False),
                                   "application/json; charset=utf-8")
 
             if path.startswith("/mem/"):
-                mid = path[len("/mem/"):]
+                mid = unquote(path[len("/mem/"):])
                 return self._send(200, _render_detail(_get_one(mid)))
 
             return self._send(404, _page("404", '<div class="empty"><div class="big">🚫</div>没有这个页面。</div>'))
@@ -469,7 +488,7 @@ def main() -> None:
     host = os.environ.get("LM_MEM_WEB_HOST", _HOST).strip() or _HOST
     port = int(os.environ.get("LM_MEM_WEB_PORT", str(_PORT)))
     httpd = ThreadingHTTPServer((host, port), _Handler)
-    print(f"lm-mem: http://{host}:{port}  (只读, Ctrl+C 退出)")
+    print(f"lm-mem: http://{host}:{port}  (可查看/检索/删除, Ctrl+C 退出)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -489,7 +508,7 @@ def start_web_thread(host=None, port=None):
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
         import sys as _sys
-        _sys.stderr.write(f"[lm-mem] Web 记忆: http://{host}:{port} (只读)\n")
+        _sys.stderr.write(f"[lm-mem] Web 记忆: http://{host}:{port} (可查看/检索/删除)\n")
         _sys.stderr.flush()
     except OSError:
         pass  # 端口被占,说明已有实例起了 Web 台,静默跳过

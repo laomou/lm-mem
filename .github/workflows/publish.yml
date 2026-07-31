@@ -11,6 +11,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # 发版前必须跑测试:0.6.0 就是在 mcp.server.fastmcp 已经导不进来的状态下发出去的。
+      - run: uv sync --group dev
+      - run: uv run pytest -q
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

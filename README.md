@@ -17,7 +17,7 @@ lm-mem backend start
 # MCP Server (stdio)
 lm-mem mcp
 
-# Web 台(只读,浏览器查看/检索记忆)
+# Web 台(浏览器查看/检索/删除记忆,默认只绑 127.0.0.1)
 lm-mem web start
 ```
 
@@ -63,12 +63,21 @@ lm-mem skill uninstall    # 移除写入的段落
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LM_MEM_BACKEND_URL` | `http://127.0.0.1:8901` | 后端地址 |
-| `LM_MEM_BACKEND_PORT` | `8901` | 后端端口(仅 `_run` / `manage.py` 用) |
+| `LM_MEM_BACKEND_URL` | `http://$LM_MEM_BACKEND_HOST:$LM_MEM_BACKEND_PORT` | 后端地址;显式设置时优先于下面两项 |
+| `LM_MEM_BACKEND_HOST` | `127.0.0.1` | 后端地址,`backend`/`web`/`mcp` 共用 |
+| `LM_MEM_BACKEND_PORT` | `8901` | 后端端口,`backend`/`web`/`mcp` 共用 |
+| `LM_MEM_EMBEDDED` | (关) | `=1` 时进程内嵌 Chroma 直读 `LM_MEM_DB_PATH`,不需要常驻后端 |
 | `LM_MEM_DATA_DIR` | `~/.lm-mem` | 数据根目录 |
 | `LM_MEM_DB_PATH` | `$LM_MEM_DATA_DIR/chroma` | 数据库路径 |
 | `LM_MEM_WEB_HOST` | `127.0.0.1` | Web UI 绑定地址 |
 | `LM_MEM_WEB_PORT` | `7531` | Web UI 端口 |
+
+改后端端口要用环境变量(三个进程都得看到同一个值),别只给 `backend start --port`:
+
+```bash
+export LM_MEM_BACKEND_PORT=9000
+lm-mem backend start && lm-mem web start   # web 会连到 9000
+```
 
 ## 作为库使用
 

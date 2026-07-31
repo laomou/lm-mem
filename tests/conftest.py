@@ -1,6 +1,7 @@
 """共享 fixture 和辅助函数。
 
 用临时目录作为存储后端落盘路径,避免污染真实记忆库。
+嵌入式模式由 LM_MEM_EMBEDDED 显式开启——库代码不再嗅探 pytest。
 """
 
 import importlib
@@ -19,6 +20,7 @@ def srv():
     """每个测试用独立的临时 DB,从 mcp_tools + backend + memory_utils 组合命名空间。"""
     tmp = tempfile.mkdtemp(prefix="lm-mem-test-")
     os.environ["LM_MEM_DB_PATH"] = tmp
+    os.environ["LM_MEM_EMBEDDED"] = "1"
     for key in _BACKEND_ENV:
         os.environ.pop(key, None)
     for mod_name in ("lm_mem.mcp_tools", "lm_mem.client", "lm_mem.backend", "lm_mem.memory_utils", "lm_mem"):

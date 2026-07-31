@@ -13,8 +13,9 @@ SCOPE_KEYS = ("user_id", "agent_id", "app_id", "run_id")
 MD_PREFIX = "m:"
 # 添加去重:语义相似度 >= 该阈值视为疑似重复。
 DEDUP_THRESHOLD = 0.85
-# 检索时的过取上限:过期项会被过滤掉,故一次多取 limit*OVERFETCH 条,
-# 不够再回退到"取全部候选"补齐,避免过期项挤掉有效结果。
+# 检索时的过取倍数:过期项要在 Python 侧剔除(Chroma 的 where 无法表达
+# "expires_at 缺失或大于 now"),所以一次多取 limit*OVERFETCH 条候选,
+# 让前排的过期项不至于把有效结果挤出 limit。取满 limit 即停,不再补取。
 OVERFETCH = 3
 
 

@@ -52,3 +52,52 @@ def test_ttl_and_purge(srv):
     assert not any("临时便签" in c for c in contents(listed["items"]))
     purged = r(srv.purge_expired())
     assert purged["deleted"] == 1
+
+
+def _expire(srv, mem_id):
+    meta = srv._collection.get(ids=[mem_id], include=["metadatas"])["metadatas"][0]
+    meta["expires_at"] = 1.0
+    srv._collection.update(ids=[mem_id], metadatas=[meta])
+
+
+def test_list_pagination_counts_only_live_records(srv):
+    """#3:过期项不得占掉 limit/offset 配额。
+
+    否则前排全是过期项时第一页会整页为空,而调用方(尤其 LLM)会把
+    空的第一页读成"这个用户没有记忆",根本不会去翻第二页。
+    """
+    ids = [get_id(srv.add_memory(content=f"便签 {i}", user_id="u1", force=True))
+           for i in range(5)]
+    for mid in ids[:3]:
+        _expire(srv, mid)
+
+    page1 = contents(r(srv.get_memories(user_id="u1", limit=3, offset=0))["items"])
+    assert len(page1) == 2, f"第一页应直接给出 2 条有效记忆,实际 {page1}"
+    assert not any("便签 0" in c or "便签 1" in c or "便签 2" in c for c in page1)
+
+    # offset 同样按有效记忆计数
+    page2 = contents(r(srv.get_memories(user_id="u1", limit=1, offset=1))["items"])
+    assert len(page2) == 1
+    assert page2[0] == page1[1]
+    # 越过末尾就该空
+    assert r(srv.get_memories(user_id="u1", limit=3, offset=2))["items"] == []
+
+
+def test_list_pagination_walks_all_live_records(srv):
+    """逐页翻完能拿到全部有效记忆,不重不漏。"""
+    for i in range(12):
+        mid = get_id(srv.add_memory(content=f"条目 {i:02d}", user_id="u1", force=True))
+        if i % 2 == 0:  # 一半过期,交错分布
+            _expire(srv, mid)
+
+    seen, offset = [], 0
+    while True:
+        page = r(srv.get_memories(user_id="u1", limit=2, offset=offset))["items"]
+        if not page:
+            break
+        seen += contents(page)
+        offset += len(page)
+    assert len(seen) == 6, seen
+    assert len(set(seen)) == 6, "翻页不得重复"
+    assert all("条目" in c for c in seen)
+
