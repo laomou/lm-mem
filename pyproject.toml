@@ -1,16 +1,21 @@
 [project]
 readme = "README.md"
 name = "lm-mem"
-version = "0.6.1"
+version = "0.7.0"
 description = "本地语义记忆 MCP Server — 跨会话持久化,语义检索"
 requires-python = ">=3.11"
 dependencies = [
-    # 上界必须保留:mcp 2.0 移除了 mcp.server.fastmcp,导入即崩。
-    # 迁移到 2.0 的 MCPServer API 后才能放宽。
-    "mcp[cli]>=1.2.0,<2",
-    # chromadb 硬依赖 onnxruntime(它的默认 embedding 走 ONNX)。onnxruntime
-    # 1.24.x 元数据声称支持 3.10 但只发 cp311+ wheel,于是 3.10 上装不起来。
-    # 底线暂时抬到 3.11;把 base 依赖换成 chromadb-client 后可以再降回去。
+    # 上界保留:1.x → 2.0 直接移除了 mcp.server.fastmcp(导入即崩),说明这个
+    # 包的 major 会做 breaking change。不写上界等于把下一个 major 的破坏性变更
+    # 直接发给用户 —— 0.6.0 就是这么坏掉的。
+    "mcp[cli]>=2,<3",
+    # chromadb 硬依赖 onnxruntime,而且去不掉:Chroma 的 embedding 是**客户端**
+    # 算的(add(documents=)/query(query_texts=) 都走本地 embedding function),
+    # 所以后端跑在别处(独立进程 / Docker)也一样要装 —— 它就是"本地语义检索"
+    # 的引擎。换 chromadb-client 会让 add/search 在运行时抛 onnxruntime 未安装。
+    #
+    # 副作用:onnxruntime 1.24.x 声称支持 3.10 但只发 cp311+ wheel,故底线 3.11。
+    # 若确需 3.10,只能加 `onnxruntime<1.24; python_version<'3.11'`(已实测可行)。
     "chromadb>=0.5.0",
 ]
 

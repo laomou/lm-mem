@@ -1,6 +1,6 @@
 """lm-mem 纯函数层:作用域、元数据、格式化等工具函数。
 
-零运行时依赖(chromadb/FastMCP),只依赖 Python 标准库。
+零运行时依赖(chromadb / mcp),只依赖 Python 标准库。
 """
 from __future__ import annotations
 
