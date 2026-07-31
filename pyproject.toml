@@ -3,20 +3,30 @@ readme = "README.md"
 name = "lm-mem"
 version = "0.7.0"
 description = "本地语义记忆 MCP Server — 跨会话持久化,语义检索"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     # 上界保留:1.x → 2.0 直接移除了 mcp.server.fastmcp(导入即崩),说明这个
     # 包的 major 会做 breaking change。不写上界等于把下一个 major 的破坏性变更
     # 直接发给用户 —— 0.6.0 就是这么坏掉的。
+    #
+    # mcp 2.0 自身要求 >=3.10,这也是本包底线为什么是 3.10 而不能更低。
     "mcp[cli]>=2,<3",
     # chromadb 硬依赖 onnxruntime,而且去不掉:Chroma 的 embedding 是**客户端**
     # 算的(add(documents=)/query(query_texts=) 都走本地 embedding function),
     # 所以后端跑在别处(独立进程 / Docker)也一样要装 —— 它就是"本地语义检索"
     # 的引擎。换 chromadb-client 会让 add/search 在运行时抛 onnxruntime 未安装。
-    #
-    # 副作用:onnxruntime 1.24.x 声称支持 3.10 但只发 cp311+ wheel,故底线 3.11。
-    # 若确需 3.10,只能加 `onnxruntime<1.24; python_version<'3.11'`(已实测可行)。
     "chromadb>=0.5.0",
+    # onnxruntime 1.24.x 的元数据谎报兼容性:声明 requires-python>=3.10,却只发
+    # cp311+ wheel。于是解析器在 3.10 上会选中它(比 1.23.2 新且"声明兼容"),
+    # 然后安装阶段才失败 —— 报的是看不懂的 wheel 错,不是清晰的版本不匹配。
+    #
+    #   ≤1.23.2  声明 >=3.10,确实有 cp310 wheel  ✓
+    #    1.24.x  声明 >=3.10,只有 cp311+ wheel   ✗ 谎报
+    #    1.28.0  声明 >=3.11,只有 cp311+ wheel   ✓ 声明正确,解析器自会跳过
+    #
+    # 所以只需在 3.10 上避开 1.24.x 这一段。3.11+ 不受影响,照常拿最新版。
+    # upstream 修好 1.24.x 的 wheel 后可以去掉这条。
+    "onnxruntime<1.24; python_version<'3.11'",
 ]
 
 [project.scripts]
