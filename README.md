@@ -1,60 +1,32 @@
 # lm-mem
 
-本地语义记忆 MCP Server — 跨会话持久化,语义检索。
+[中文](README_zh.md)
 
-## 安装
+Local semantic memory MCP server — cross-session persistence, semantic retrieval.
 
-```bash
-pip install lm-mem
-```
+Gives an AI agent a memory it can read and write across sessions: save user preferences, project decisions, and past conclusions, then retrieve them later by meaning. All data stays local.
 
-## 使用
+## Install
 
 ```bash
-# 启动后端
-lm-mem backend start
-
-# MCP Server (stdio)
-lm-mem mcp
-
-# Web 台(浏览器查看/检索/删除记忆,默认只绑 127.0.0.1)
-lm-mem web start
+pip install lm-mem      # or: uvx lm-mem <command>
 ```
 
-## 装入 agent 规则文件
-
-`lm-mem skill install` 把一段常驻触发规则写进已安装 agent 的规则文件，
-让 agent 知道**何时**该调用记忆工具（完整策略见 skill 的 SKILL.md）。
-
-自动检测下列 agent 的配置目录，装了几个写几个：
-
-| agent | `--platform` 取值 | 检测目录 | 写入文件 |
-|---|---|---|---|
-| Claude Code | `claude` | `~/.claude/` | `CLAUDE.md` |
-| Codex | `codex` | `~/.codex/` | `AGENTS.md` |
-| opencode | `opencode` | `~/.config/opencode/` | `AGENTS.md` |
-| OpenClaw | `openclaw` | `~/.openclaw/` | `AGENTS.md` |
+## Usage
 
 ```bash
-lm-mem skill install      # 检测并写入(幂等，可重复执行以同步最新版本)
-lm-mem skill status       # 查看各文件安装状态
-lm-mem skill uninstall    # 移除写入的段落
+lm-mem backend start    # 1. start the resident backend (storage + vector search)
+lm-mem mcp              # 2. run as an MCP server (stdio) for agents to connect
+lm-mem web start        # (optional) browse/search/delete memories in a browser, default http://127.0.0.1:7531
 ```
 
-只想操作某几个 agent 时用 `--platform`（可重复）：
+`mcp` is a pure client — it connects to the backend started by `backend start`, so **start the backend first**. The backend runs in its own session and keeps running after you close the terminal; stop it with `lm-mem backend stop`.
 
-```bash
-lm-mem skill install --platform claude                     # 只写 Claude Code
-lm-mem skill install --platform codex --platform openclaw  # 写这两个
-lm-mem skill uninstall --platform claude                   # 只从 Claude 移除
-```
+> Don't want a separate backend process? Set `LM_MEM_EMBEDDED=1` and the MCP process reads/writes the local database directly, skipping `backend start`. Suitable only when a single process accesses the store — for concurrent access (e.g. MCP + web at once) use the default backend mode.
 
-显式指定的 platform **优先于自动检测** —— 配置目录还不存在也会照写并新建
-（适合先把规则配好、之后再装那个 agent）。
+## Connect an agent (MCP client config)
 
-写入内容用 `<!-- lm-mem:begin -->…<!-- lm-mem:end -->` 包裹，不影响文件其余部分。
-
-## MCP 客户端配置
+Add this to your MCP client (e.g. Claude Code):
 
 ```json
 {
@@ -62,83 +34,57 @@ lm-mem skill uninstall --platform claude                   # 只从 Claude 移�
     "memory": {
       "command": "uvx",
       "args": ["lm-mem", "mcp"],
-      "env": {
-        "LM_MEM_BACKEND_URL": "http://127.0.0.1:8901"
-      }
+      "env": { "LM_MEM_BACKEND_URL": "http://127.0.0.1:8901" }
     }
   }
 }
 ```
 
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `LM_MEM_BACKEND_URL` | `http://$LM_MEM_BACKEND_HOST:$LM_MEM_BACKEND_PORT` | 后端地址;显式设置时优先于下面两项 |
-| `LM_MEM_BACKEND_HOST` | `127.0.0.1` | 后端地址,`backend`/`web`/`mcp` 共用 |
-| `LM_MEM_BACKEND_PORT` | `8901` | 后端端口,`backend`/`web`/`mcp` 共用 |
-| `LM_MEM_EMBEDDED` | (关) | `=1` 时进程内嵌 Chroma 直读 `LM_MEM_DB_PATH`,不需要常驻后端 |
-| `LM_MEM_AUTO_PURGE` | `1` | `lm-mem mcp` 启动时清一次过期记忆;`=0` 关闭(仍可手动调 `purge_expired`) |
-| `LM_MEM_DATA_DIR` | `~/.lm-mem` | 数据根目录 |
-| `LM_MEM_DB_PATH` | `$LM_MEM_DATA_DIR/chroma` | 数据库路径 |
-| `LM_MEM_CHROMA` | (自动) | `backend start` 用的 chroma 可执行文件;默认取 `sys.executable` 同目录,找不到再靠 PATH。仅在 chroma 装在别处时才需显式指定 |
-| `LM_MEM_WEB_HOST` | `127.0.0.1` | Web UI 绑定地址 |
-| `LM_MEM_WEB_PORT` | `7531` | Web UI 端口 |
-
-改后端端口要用环境变量(三个进程都得看到同一个值),别只给 `backend start --port`:
+Then run `lm-mem skill install` to write a small resident trigger snippet into your agent's
+rules file, so it knows **when** to call the memory tools (full policy lives in the SKILL.md
+shipped with the plugin). It auto-detects Claude Code / Codex / opencode / OpenClaw and writes
+to whichever are installed; `--platform claude` (repeatable) targets specific ones.
 
 ```bash
-export LM_MEM_BACKEND_PORT=9000
-lm-mem backend start && lm-mem web start   # web 会连到 9000
+lm-mem skill install      # idempotent, re-run to sync the latest version
+lm-mem skill status       # show install status
+lm-mem skill uninstall    # remove
 ```
 
-## 常驻部署
-
-`lm-mem backend start` 只是起一次子进程,**没有自动重启**:后端被 OOM / 崩溃 /
-机器重启带走后不会自愈,下一次记忆调用会连接失败。要真正"跨会话持久",把进程
-监管交给 OS。systemd 用户级示例:
-
-```ini
-# ~/.config/systemd/user/lm-mem.service
-[Unit]
-Description=lm-mem backend
-
-[Service]
-# 直接跑 chroma,不经 manage.py 的一次性包装(让 systemd 自己管生命周期)
-ExecStart=%h/.local/bin/chroma run --path %h/.lm-mem/chroma --host 127.0.0.1 --port 8901
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user enable --now lm-mem
-loginctl enable-linger "$USER"   # 未登录时也保持运行
-```
-
-> `lm-mem <svc> stop` 现在会等进程真正退出(SIGTERM 后确认,超时才 SIGKILL),
-> 所以 `restart` 不会撞上"旧进程还占着端口"。但自愈仍需上面的 systemd/supervisor。
-
-## 作为库使用
+## Use as a library
 
 ```python
 from lm_mem import MemoryClient
 
-client = MemoryClient()                 # 用共享后端(由 LM_MEM_BACKEND_URL 决定)
-# client = MemoryClient(url="http://127.0.0.1:8901")  # 或显式指定后端
+client = MemoryClient()                 # connects to the shared backend (via LM_MEM_BACKEND_URL)
 
-# 保存(同作用域内内容高度相似会自动查重;force=True 跳过)
+# save (near-duplicate within the same scope is auto-detected; force=True skips the check)
 client.add("用户偏好 pytest", user_id="u1")
 client.add(messages=[{"role": "user", "content": "I like cats"}], user_id="u1")
 
-# 语义检索
+# semantic search
 for r in client.search("测试框架偏好", user_id="u1")["items"]:
     print(r["content"], r["similarity"])
 
-# 查看 / 更新 / 删除
+# get / update / delete
 client.get("mem-id-xxx")
-client.update("mem-id-xxx", content="新内容")
+client.update("mem-id-xxx", content="new content")
 client.delete("mem-id-xxx")
 ```
+
+## Configuration
+
+Common environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LM_MEM_BACKEND_URL` | `http://127.0.0.1:8901` | backend address the MCP client connects to |
+| `LM_MEM_EMBEDDED` | (off) | `=1` embeds storage in-process, no resident backend needed |
+| `LM_MEM_DATA_DIR` | `~/.lm-mem` | data root directory |
+
+Change the port with `LM_MEM_BACKEND_PORT` (shared by backend / web / mcp — don't just pass
+`--port`). See `lm-mem <command> --help` and the source for the full list.
+
+The backend started by `backend start` is already resident, but it is **not** auto-restarted on
+crash or reboot. If you need that, hand the chroma process to a service manager (systemd /
+supervisor, `Restart=on-failure`).
