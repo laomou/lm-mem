@@ -1,4 +1,4 @@
-"""lm-mem MCP 工具层:FastMCP + 14 个 @mcp.tool()。
+"""lm-mem MCP 工具层:MCPServer + 14 个 @_tool()。
 
 业务逻辑全部委托给 MemoryClient(client.py),本层只负责:
 - 声明 MCP 工具签名与 docstring(供 LLM 理解)
@@ -16,19 +16,31 @@ from __future__ import annotations
 
 import json
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from lm_mem.client import MemoryClient
 
-mcp = FastMCP("lm-mem")
+mcp = MCPServer("lm-mem")
 _client = MemoryClient()
+
+
+def _tool():
+    """注册一个工具,并关掉 2.0 的自动 structured output。
+
+    工具返回的已经是紧凑 JSON 字符串。mcp 2.0 默认会再包一层
+    `structured_content={"result": "<一模一样的字符串>"}`:内容完全重复,
+    里面还是字符串而非对象,对客户端没有任何结构价值,只是让每次响应体积
+    翻倍(get_memories / export_memories 这类大返回尤其明显)。
+    关掉后线上行为与 1.x 的 FastMCP 完全一致。
+    """
+    return mcp.tool(structured_output=False)
 
 
 def _dumps(obj):
     return json.dumps(obj, ensure_ascii=False)
 
 
-@mcp.tool()
+@_tool()
 def add_memory(
     content: str = "",
     messages: str = "",
@@ -69,7 +81,7 @@ def add_memory(
     ))
 
 
-@mcp.tool()
+@_tool()
 def search_memories(
     query: str,
     limit: int = 5,
@@ -97,7 +109,7 @@ def search_memories(
     ))
 
 
-@mcp.tool()
+@_tool()
 def get_memories(
     limit: int = 50,
     offset: int = 0,
@@ -124,7 +136,7 @@ def get_memories(
     ))
 
 
-@mcp.tool()
+@_tool()
 def get_memory(mem_id: str) -> str:
     """按 id 获取单条记忆。
 
@@ -136,7 +148,7 @@ def get_memory(mem_id: str) -> str:
     return _dumps(_client.get(mem_id))
 
 
-@mcp.tool()
+@_tool()
 def update_memory(
     mem_id: str,
     content: str = "",
@@ -164,7 +176,7 @@ def update_memory(
     ))
 
 
-@mcp.tool()
+@_tool()
 def delete_memory(mem_id: str) -> str:
     """按 id 删除单条记忆。
 
@@ -176,7 +188,7 @@ def delete_memory(mem_id: str) -> str:
     return _dumps(_client.delete(mem_id))
 
 
-@mcp.tool()
+@_tool()
 def delete_all_memories(
     user_id: str = "",
     agent_id: str = "",
@@ -198,7 +210,7 @@ def delete_all_memories(
     ))
 
 
-@mcp.tool()
+@_tool()
 def delete_entities(entity_type: str, entity_id: str) -> str:
     """删除某个实体及其所有记忆。
 
@@ -214,7 +226,7 @@ def delete_entities(entity_type: str, entity_id: str) -> str:
     return _dumps(_client.delete_entity(entity_type, entity_id))
 
 
-@mcp.tool()
+@_tool()
 def list_entities(entity_type: str = "") -> str:
     """列出已存储的实体(users/agents/apps/runs)。
 
@@ -229,7 +241,7 @@ def list_entities(entity_type: str = "") -> str:
     return _dumps(_client.list_entities(entity_type))
 
 
-@mcp.tool()
+@_tool()
 def memory_stats(
     user_id: str = "",
     agent_id: str = "",
@@ -249,7 +261,7 @@ def memory_stats(
     ))
 
 
-@mcp.tool()
+@_tool()
 def export_memories(
     fmt: str = "json",
     user_id: str = "",
@@ -274,7 +286,7 @@ def export_memories(
     ))
 
 
-@mcp.tool()
+@_tool()
 def purge_expired() -> str:
     """清理所有已过期(超过 TTL)的记忆。
 
@@ -284,7 +296,7 @@ def purge_expired() -> str:
     return _dumps(_client.purge_expired())
 
 
-@mcp.tool()
+@_tool()
 def get_user_context(
     user_id: str = "",
     limit: int = 10,
@@ -304,7 +316,7 @@ def get_user_context(
     return _dumps(_client.get_user_context(user_id=user_id, limit=limit))
 
 
-@mcp.tool()
+@_tool()
 def import_memories(
     data: str,
     fmt: str = "json",
