@@ -3,11 +3,14 @@ readme = "README.md"
 name = "lm-mem"
 version = "0.6.1"
 description = "本地语义记忆 MCP Server — 跨会话持久化,语义检索"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     # 上界必须保留:mcp 2.0 移除了 mcp.server.fastmcp,导入即崩。
     # 迁移到 2.0 的 MCPServer API 后才能放宽。
     "mcp[cli]>=1.2.0,<2",
+    # chromadb 硬依赖 onnxruntime(它的默认 embedding 走 ONNX)。onnxruntime
+    # 1.24.x 元数据声称支持 3.10 但只发 cp311+ wheel,于是 3.10 上装不起来。
+    # 底线暂时抬到 3.11;把 base 依赖换成 chromadb-client 后可以再降回去。
     "chromadb>=0.5.0",
 ]
 
