@@ -53,8 +53,8 @@ class MemoryClient:
         client.update("mem-id-xxx", content="新内容")
         client.delete("mem-id-xxx")
 
-    默认连接由 LM_MEM_BACKEND_URL(pytest 下为嵌入式)决定的共享后端;
-    传 url 可显式指向某个后端,如 MemoryClient(url="http://127.0.0.1:8901")。
+    默认连接由 LM_MEM_BACKEND_URL 决定的共享后端(或 LM_MEM_EMBEDDED=1 时的
+    进程内嵌模式);传 url 可显式指向某个后端,如 MemoryClient(url="http://127.0.0.1:8901")。
     """
 
     def __init__(self, url: str = ""):
@@ -65,7 +65,7 @@ class MemoryClient:
         """获取本客户端使用的集合。
 
         传了 url → 用该 url 的独立连接(优先于 LM_MEM_BACKEND_URL 环境变量);
-        未传 → 用全局共享后端(由 LM_MEM_BACKEND_URL 决定,pytest 下为嵌入式)。
+        未传 → 用全局共享后端(由 LM_MEM_BACKEND_URL / LM_MEM_EMBEDDED 决定)。
         """
         if not self._url:
             return get_collection()
@@ -256,20 +256,41 @@ class MemoryClient:
         run_id: str = "",
         metadata_filter: str = "",
     ) -> dict:
-        """列出记忆，支持分页与过滤。"""
+        """列出记忆，支持分页与过滤。
+
+        limit/offset 是按**有效(未过期)记忆**计数的。ChromaDB 的 where 无法表达
+        "expires_at 不存在或大于 now"(缺字段无法过滤),所以过期项只能在 Python 侧
+        剔除;若直接把 limit/offset 交给 Chroma,过期项会占掉配额,导致某一页
+        整页为空——调用方(尤其 LLM)会误判成"没有记忆"。故这里分块取到
+        攒够 offset+limit 条有效记忆为止。
+        """
         where_clauses = clauses(user_id, agent_id, app_id, run_id)
         where_clauses += metadata_filter_clauses(metadata_filter)
         where = combine(where_clauses)
-        res = self._col().get(
-            where=where, limit=limit, offset=offset, include=["documents", "metadatas"]
-        )
         now = time.time()
-        items = [
-            memory_to_record(mem_id, doc, meta)
-            for mem_id, doc, meta in zip(res["ids"], res["documents"], res["metadatas"])
-            if not is_expired(meta, now)
-        ]
-        return {"items": items, "offset": offset}
+        need = offset + max(limit, 0)
+        chunk = max(limit * OVERFETCH, 100)
+        live: list[dict] = []
+        cursor = 0
+        while len(live) < need:
+            res = self._col().get(
+                where=where, limit=chunk, offset=cursor,
+                include=["documents", "metadatas"],
+            )
+            got = len(res["ids"])
+            if got == 0:
+                break
+            cursor += got
+            live.extend(
+                memory_to_record(mem_id, doc, meta)
+                for mem_id, doc, meta in zip(
+                    res["ids"], res["documents"], res["metadatas"]
+                )
+                if not is_expired(meta, now)
+            )
+            if got < chunk:  # Chroma 已给完,没有下一块了
+                break
+        return {"items": live[offset:need], "offset": offset}
 
     # ── 实体 / 统计 ───────────────────────────────────────
 

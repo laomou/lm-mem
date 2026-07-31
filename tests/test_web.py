@@ -2,6 +2,8 @@
 
 用嵌入式 chroma(临时 DB),不依赖外部后端。
 """
+import html
+import http.client
 import importlib
 import json
 import os
@@ -10,7 +12,9 @@ import tempfile
 import threading
 import time
 import urllib.request
+from html.parser import HTMLParser
 from http.server import ThreadingHTTPServer
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import pytest
 
@@ -19,6 +23,7 @@ import pytest
 def web_srv(free_port):
     """起一个真实 web server,返回 (base_url, web模块)。每测试独立 DB。"""
     os.environ["LM_MEM_DB_PATH"] = tempfile.mkdtemp(prefix="lm-mem-web-test-")
+    os.environ["LM_MEM_EMBEDDED"] = "1"
     os.environ.pop("LM_MEM_BACKEND_URL", None)
     for m in ("lm_mem.backend", "lm_mem.memory_utils", "lm_mem.client",
               "lm_mem.web", "lm_mem"):
@@ -136,3 +141,126 @@ def test_pager_url_encodes_special_chars(web_srv):
     assert code == 200
     # 分页链接里应出现编码后的值,而非裸 "a&b c"
     assert "a%26b" in body and "第 1/2 页" in body
+
+
+# ── 以下为 review 回归测试 ────────────────────────────
+
+
+def _raw(base, method, path, headers=None):
+    """不跟随重定向的裸 HTTP 请求,用于检查 Location 头本身。"""
+    u = urlparse(base)
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+    conn.request(method, path, headers=headers or {})
+    resp = conn.getresponse()
+    resp.read()
+    out = (resp.status, dict(resp.getheaders()))
+    conn.close()
+    return out
+
+
+class _FormParser(HTMLParser):
+    """抓出第一个 <form> 的属性。HTMLParser 会按浏览器规则解 HTML 实体,
+    所以拿到的 onsubmit 就是浏览器交给 JS 引擎的那段源码。"""
+
+    def __init__(self):
+        super().__init__()
+        self.form = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "form" and not self.form:
+            self.form = dict(attrs)
+
+
+@pytest.mark.parametrize("hostile", [
+    "');x();\"" + "z" * 20,      # 想提前闭合单引号并调用函数
+    '");y();\'' + "z" * 20,      # 双引号版本
+    "\\');z();" + "w" * 20,      # 反斜杠开头
+    '"+alert(1)+"' + "v" * 20,   # 字符串拼接
+])
+def test_del_form_hostile_id_stays_single_js_literal(web_srv, hostile):
+    """#6:onsubmit 是 JS 上下文,任何 id 都不得逃出 confirm() 的字符串字面量。
+
+    只做 html.escape 是不够的:浏览器先解 HTML 实体再解析 JS,`&#x27;` 会还原
+    成 `'`。mem_id 可由 import_memories 指定,所以这是可达路径。
+    """
+    _, web = web_srv
+    parser = _FormParser()
+    parser.feed(web._del_form(hostile))
+    onsubmit = parser.form["onsubmit"]  # HTMLParser 已按浏览器规则解过实体
+
+    assert onsubmit.startswith("return confirm(") and onsubmit.endswith(")")
+    arg = onsubmit[len("return confirm("):-1]
+    # 能被 json 整段解析成 str <=> 它是单个完整的 JS 字符串字面量
+    msg = json.loads(arg)
+    assert isinstance(msg, str)
+    assert msg == f"确认删除记忆 {hostile[:8]}…?此操作不可撤销。"
+    # action 里的 id 仍然完整可用(百分号编码形式)
+    assert parser.form["action"] == f"/mem/{quote(hostile, safe='')}/delete"
+    assert unquote(parser.form["action"][len("/mem/"):-len("/delete")]) == hostile
+
+
+def test_delete_redirect_url_encodes_id(web_srv):
+    """#7:Location 是 URL 上下文,id 里的 & 必须编码,不能用 HTML 转义。"""
+    base, web = web_srv
+    web._client.import_data(json.dumps([{"id": "a&b", "content": "带 & 的 id"}]))
+    host = base.split("//")[1]
+    status, headers = _raw(base, "POST", "/mem/a&b/delete",
+                           {"Origin": base, "Host": host})
+    assert status == 303
+    loc = headers["Location"]
+    assert "id=a%26b" in loc, loc
+    assert "&amp;" not in loc, "HTML 实体不该出现在 URL 里"
+    # 编码正确的话 id 参数解析回来仍是原值
+    assert parse_qs(urlparse(loc).query)["id"] == ["a&b"]
+    assert parse_qs(urlparse(loc).query)["deleted"] == ["1"]
+
+
+def test_web_version_matches_package(web_srv):
+    """#10:web 不再自己维护版本号,避免 UI 显示 0.3.0 而包是 0.6.x。"""
+    base, _ = web_srv
+    import lm_mem
+    _, body = _req("GET", f"{base}/version")
+    assert json.loads(body)["version"] == lm_mem.__version__
+    _, page = _req("GET", f"{base}/")
+    assert f"v{lm_mem.__version__}" in page
+
+
+@pytest.mark.parametrize("mem_id", [
+    "a&b",              # & 会被当成查询串分隔符
+    "with space",
+    "pct%2Fslash",      # 本身含 % 的 id
+    "quote'and\"both",
+    "中文-id",
+])
+def test_special_char_ids_are_viewable_and_deletable(web_srv, mem_id):
+    """#14:id 不保证是 uuid(import 可指定),Web 台必须能打开并删除它们。
+
+    修复前:生成的链接没做百分号编码、服务端也没解码,这类记忆在列表里
+    看得见,点进去 404,删也删不掉。
+    """
+    base, web = web_srv
+    content = f"内容 {mem_id}"
+    web._client.import_data(json.dumps([{"id": mem_id, "content": content}]))
+    quoted = quote(mem_id, safe="")
+
+    # 列表页给出的链接必须是编码后的(quote 之后已无 HTML 特殊字符)
+    _, page = _req("GET", f"{base}/")
+    assert f'href="/mem/{quoted}"' in page
+
+    # 详情页打得开(页面里的内容是 HTML 转义过的)
+    code, body = _req("GET", f"{base}/mem/{quoted}")
+    assert code == 200, f"详情页打不开 {mem_id!r}"
+    assert html.escape(content) in body, f"详情页没渲染出内容 {mem_id!r}"
+
+    # JSON 详情也对得上
+    _, api = _req("GET", f"{base}/api/mem/{quoted}")
+    assert json.loads(api)["id"] == mem_id
+
+    # 删得掉
+    host = base.split("//")[1]
+    code, body = _req("DELETE", f"{base}/api/mem/{quoted}",
+                      headers={"Origin": base, "Host": host})
+    assert code == 200 and json.loads(body)["ok"], f"删不掉 {mem_id!r}"
+    assert web._get_one(mem_id) is None
+
+

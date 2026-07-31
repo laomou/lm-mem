@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-ROOT = Path(__file__).resolve().parent.parent.parent  # src/lm_mem/ → project root
 PYTHON = os.environ.get("LM_MEM_PYTHON") or sys.executable
 _CHROMA_CMD = os.environ.get("LM_MEM_CHROMA") or "chroma"
 _DATA_ROOT = os.environ.get("LM_MEM_DATA_DIR") or str(Path.home() / ".lm-mem")
@@ -28,10 +27,20 @@ PID_DIR.mkdir(parents=True, exist_ok=True)
 BACKEND_PID_FILE = PID_DIR / "backend.pid"
 WEB_PID_FILE = PID_DIR / "web.pid"
 
-BACKEND_HOST = "127.0.0.1"
-BACKEND_PORT = 8901
+# 后端地址:backend / web / mcp 三方必须看到同一个值,否则 web 会去连一个
+# 没人监听的端口。改端口用 LM_MEM_BACKEND_PORT(或直接给 LM_MEM_BACKEND_URL);
+# `--port` 只作用于本次调用。
+BACKEND_HOST = os.environ.get("LM_MEM_BACKEND_HOST", "127.0.0.1")
+BACKEND_PORT = int(os.environ.get("LM_MEM_BACKEND_PORT", "8901"))
 WEB_HOST = os.environ.get("LM_MEM_WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.environ.get("LM_MEM_WEB_PORT", "7531"))
+
+
+def _backend_url(host=None, port=None):
+    """后端 URL。显式给的 LM_MEM_BACKEND_URL 优先,其次 host/port。"""
+    if url := os.environ.get("LM_MEM_BACKEND_URL", "").strip():
+        return url
+    return f"http://{host or BACKEND_HOST}:{port or BACKEND_PORT}"
 
 
 def _w(s):
@@ -60,7 +69,7 @@ def _web_spawn(host, port):
     argv = [str(PYTHON), str(Path(__file__).parent / "web.py"),
             f"--lm-mem-web-port={port}"]
     env = os.environ.copy()
-    env["LM_MEM_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+    env["LM_MEM_BACKEND_URL"] = _backend_url()
     env["LM_MEM_WEB_HOST"] = host
     env["LM_MEM_WEB_PORT"] = str(port)
     return argv, env
@@ -151,8 +160,13 @@ def _pid_is(svc, pid, host, port):
 def _stop(svc, host=None, port=None):
     host, port = _resolve(svc, host, port)
     if svc.pid_file.exists():
-        pid = int(svc.pid_file.read_text().strip())
-        if _pid_is(svc, pid, host, port):
+        # PID 文件可能是空的/被写坏的(进程被 kill -9、磁盘满……)。
+        # 这种情况必须继续走下面的 pkill 兜底,而不是抛 ValueError 出去。
+        try:
+            pid = int(svc.pid_file.read_text().strip())
+        except (ValueError, OSError):
+            pid = 0
+        if pid and _pid_is(svc, pid, host, port):
             try:
                 os.kill(pid, signal.SIGTERM)
                 _w(f"{svc.name}已停止 (pid={pid})")
@@ -179,12 +193,7 @@ def _status(svc, host=None, port=None):
 
 def _mcp_run():
     """在当前进程内加载并运行 MCP server(stdio 模式)。"""
-    backend_host = os.environ.get("LM_MEM_BACKEND_HOST", BACKEND_HOST)
-    backend_port = os.environ.get("LM_MEM_BACKEND_PORT", str(BACKEND_PORT))
-    os.environ.setdefault(
-        "LM_MEM_BACKEND_URL",
-        f"http://{backend_host}:{backend_port}",
-    )
+    os.environ.setdefault("LM_MEM_BACKEND_URL", _backend_url())
     from lm_mem.mcp_tools import mcp
     mcp.run()
 
