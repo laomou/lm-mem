@@ -63,6 +63,7 @@ def test_stop_kills_valid_pid_without_pkill(tmp_path, monkeypatch):
     """PID 有效且身份匹配时走 SIGTERM,不该退化到 pkill。"""
     m = _manage()
     monkeypatch.setattr(m, "_pid_is", lambda svc, pid, host, port: True)
+    monkeypatch.setattr(m, "_await_exit", lambda pid, timeout=10.0: True)  # 假装已退出
     killed, pkills = [], []
     monkeypatch.setattr(m.os, "kill", lambda pid, sig: killed.append((pid, sig)))
     monkeypatch.setattr(
@@ -75,7 +76,7 @@ def test_stop_kills_valid_pid_without_pkill(tmp_path, monkeypatch):
 
     m._stop(svc, "127.0.0.1", 7531)
 
-    assert killed == [(4242, m.signal.SIGTERM)]
+    assert (4242, m.signal.SIGTERM) in killed
     assert pkills == []
     assert not pid_file.exists()
 
@@ -216,3 +217,70 @@ def test_backend_spawn_uses_resolved_chroma(tmp_path, monkeypatch):
     argv, _ = m._backend_spawn("127.0.0.1", 8901)
     assert argv[0] == str(tmp_path / "chroma")
     assert argv[1] == "run"
+
+
+# ── _await_exit / _stop 等进程真退(优雅停服务) ──────────
+
+
+def test_await_exit_returns_when_process_gone(monkeypatch):
+    """探测到进程消失(ProcessLookupError)→ 返回 True,不发 SIGKILL。"""
+    m = _manage()
+    calls = []
+    def fake_kill(pid, sig):
+        calls.append(sig)
+        if sig == 0:
+            raise ProcessLookupError()   # 一上来就没了
+        raise AssertionError("不该发 SIGKILL")
+    monkeypatch.setattr(m.os, "kill", fake_kill)
+    assert m._await_exit(999999, timeout=2) is True
+    assert m.signal.SIGKILL not in calls
+
+
+def test_await_exit_sigkills_after_timeout(monkeypatch):
+    """进程一直存活 → 超时后发 SIGKILL 兜底,返回 False。"""
+    m = _manage()
+    sigkilled = []
+    def fake_kill(pid, sig):
+        if sig == 0:
+            return                       # 永远"还在"
+        sigkilled.append(sig)
+    monkeypatch.setattr(m.os, "kill", fake_kill)
+    assert m._await_exit(4242, timeout=0.5) is False
+    assert sigkilled == [m.signal.SIGKILL]
+
+
+def test_stop_waits_for_real_exit(tmp_path, monkeypatch):
+    """_stop 发完 SIGTERM 后必须调用 _await_exit 等进程真退,而不是立刻返回。
+
+    用一个"前 N 次探测存活、之后消失"的假 os.kill 模拟 SIGTERM 生效的过程,
+    验证 _stop 确实在等(而不是发完信号就走)。真实进程的父子/僵尸语义与被测
+    逻辑无关,不引入。
+    """
+    m = _manage()
+    probes = {"n": 0}
+    sigterm_sent = []
+
+    def fake_kill(pid, sig):
+        if sig == m.signal.SIGTERM:
+            sigterm_sent.append(pid)
+            return
+        if sig == 0:                     # 存活探测
+            probes["n"] += 1
+            if probes["n"] < 3:          # 前两次"还在",之后"没了"
+                return
+            raise ProcessLookupError()
+        raise AssertionError(f"不该发送信号 {sig}")   # 不该走到 SIGKILL
+
+    monkeypatch.setattr(m, "_pid_is", lambda *a: True)
+    monkeypatch.setattr(m.os, "kill", fake_kill)
+    monkeypatch.setattr(m.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 1})())
+    pid_file = tmp_path / "backend.pid"
+    pid_file.write_text("4242")
+    svc = dataclasses.replace(m.BACKEND, pid_file=pid_file)
+
+    m._stop(svc, "127.0.0.1", 8901)
+
+    assert sigterm_sent == [4242], "应先发 SIGTERM"
+    assert probes["n"] >= 3, "应轮询探测存活直到进程消失,而不是发完信号就返回"
+    assert not pid_file.exists()

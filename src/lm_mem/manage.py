@@ -178,6 +178,31 @@ def _pid_is(svc, pid, host, port):
     return f"--lm-mem-web-port={port}" in cmdline if svc is WEB else f"--port {port}" in cmdline
 
 
+def _await_exit(pid, timeout=10.0):
+    """等 pid 真正退出;超时未退则 SIGKILL 兜底。返回是否已确认退出。
+
+    SIGTERM 是异步的:chroma 收到后可能还在 flush 索引,进程不会立刻消失。
+    发完信号就报"已停止"会误导用户,更会让紧随其后的 restart 撞上"旧进程还占着
+    端口"。用 os.kill(pid, 0) 轮询存活(不真正发信号,只探测),给 chroma 一个
+    干净落盘的窗口;实在不退再 SIGKILL。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)          # 只探测:进程还在则成功返回
+        except ProcessLookupError:
+            return True              # 已退出
+        except PermissionError:
+            return True              # 存在但非本用户(不该发生),当作已处理
+        time.sleep(0.2)
+    # 超时仍在 → 强杀兜底
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    return False
+
+
 def _stop(svc, host=None, port=None):
     host, port = _resolve(svc, host, port)
     if svc.pid_file.exists():
@@ -190,7 +215,11 @@ def _stop(svc, host=None, port=None):
         if pid and _pid_is(svc, pid, host, port):
             try:
                 os.kill(pid, signal.SIGTERM)
-                _w(f"{svc.name}已停止 (pid={pid})")
+                # 等它真的退出再报成功,否则 restart 会撞上旧进程占端口
+                if _await_exit(pid):
+                    _w(f"{svc.name}已停止 (pid={pid})")
+                else:
+                    _w(f"{svc.name}未在超时内退出,已强制杀死 (pid={pid})")
                 svc.pid_file.unlink(missing_ok=True)
                 return
             except ProcessLookupError:
@@ -293,9 +322,8 @@ def _run(entity, action, host, port, platforms=()):
         _w(f"未知实体:{entity}")
         sys.exit(1)
     if action == "restart":
-        _stop(svc, host, port)
-        time.sleep(1)
-        _start(svc, host, port)
+        _stop(svc, host, port)   # 现在会等进程真正退出,不再需要 sleep 猜时间
+        _start(svc, host, port)  # _start 自带就绪轮询,能容忍端口释放的毫秒级延迟
     else:
         _ACTIONS[action](svc, host, port)
 
