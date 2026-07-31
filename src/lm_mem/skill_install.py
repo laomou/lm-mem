@@ -18,19 +18,26 @@ END = "<!-- lm-mem:end -->"
 
 @dataclass(frozen=True)
 class Agent:
+    key: str            # --platform 的取值
     label: str          # 展示名
     config_dir: Path    # 存在即视作"装了这个 agent"
     target: Path        # 规则文件写入路径
 
 
-# 已知 agent 注册表:配置目录 → 规则文件。新增 agent 只改这里。
+# --platform 可选值。与 _agents() 的 key 一一对应(有测试守着不漂移),
+# 单独列出来是为了让 argparse 能用 choices= 直接校验并给出友好报错。
+PLATFORMS = ("claude", "codex", "opencode", "openclaw")
+
+
+# 已知 agent 注册表:配置目录 → 规则文件。新增 agent 只改这里(和 PLATFORMS)。
 def _agents() -> list[Agent]:
     h = Path.home()
     return [
-        Agent("Claude Code", h / ".claude", h / ".claude" / "CLAUDE.md"),
-        Agent("Codex", h / ".codex", h / ".codex" / "AGENTS.md"),
-        Agent("opencode", h / ".config" / "opencode", h / ".config" / "opencode" / "AGENTS.md"),
-        Agent("OpenClaw", h / ".openclaw", h / ".openclaw" / "AGENTS.md"),
+        Agent("claude", "Claude Code", h / ".claude", h / ".claude" / "CLAUDE.md"),
+        Agent("codex", "Codex", h / ".codex", h / ".codex" / "AGENTS.md"),
+        Agent("opencode", "opencode", h / ".config" / "opencode",
+              h / ".config" / "opencode" / "AGENTS.md"),
+        Agent("openclaw", "OpenClaw", h / ".openclaw", h / ".openclaw" / "AGENTS.md"),
     ]
 
 
@@ -113,23 +120,40 @@ def _status_one(target: Path) -> None:
         _w(f"{target}:已安装,但与当前版本不一致(可重新 install 同步)")
 
 
-def _each(fn) -> None:
-    detected = _detect()
-    if not detected:
-        _w("未检测到任何已知 agent(claude/codex/opencode/openclaw),跳过")
+def _select(platforms) -> tuple[list[Agent], bool]:
+    """选出要操作的 agent,返回 (列表, 是否自动检测出来的)。
+
+    platforms 为空 → 按配置目录自动检测(原行为)。
+    显式给了 --platform → 只取这些,且**显式意图优先于检测**:即使配置目录还不
+    存在也照写(可能是先配规则再装 agent),只是会提示一下新建了目录。
+    """
+    if not platforms:
+        return _detect(), True
+    by_key = {a.key: a for a in _agents()}
+    # 去重但保持用户给出的顺序
+    return [by_key[p] for p in dict.fromkeys(platforms) if p in by_key], False
+
+
+def _each(fn, platforms=()) -> None:
+    chosen, auto = _select(platforms)
+    if not chosen:
+        if auto:
+            _w("未检测到任何已知 agent(" + "/".join(PLATFORMS) + "),跳过")
         return
-    _w("检测到:" + "、".join(a.label for a in detected))
-    for a in detected:
+    _w(("检测到:" if auto else "指定:") + "、".join(a.label for a in chosen))
+    for a in chosen:
+        if not auto and not a.config_dir.is_dir():
+            _w(f"  注意:{a.config_dir} 不存在,将按你指定的 platform 新建")
         fn(a.target)
 
 
-def install() -> None:
-    _each(_install_one)
+def install(platforms=()) -> None:
+    _each(_install_one, platforms)
 
 
-def uninstall() -> None:
-    _each(_uninstall_one)
+def uninstall(platforms=()) -> None:
+    _each(_uninstall_one, platforms)
 
 
-def status() -> None:
-    _each(_status_one)
+def status(platforms=()) -> None:
+    _each(_status_one, platforms)
