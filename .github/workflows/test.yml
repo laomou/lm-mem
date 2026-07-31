@@ -1,0 +1,24 @@
+name: test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --group dev --python ${{ matrix.python-version }}
+      # 单独 import 一次:依赖上界失效(如 mcp 2.x 移除 fastmcp)时这里最先炸,
+      # 且不会被 conftest 的 fixture 报错掩盖成 35 个 ERROR。
+      - run: uv run python -c "import lm_mem.mcp_tools, lm_mem.web, lm_mem.manage"
+      - run: uv run pytest -q
