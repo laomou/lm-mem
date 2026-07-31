@@ -11,14 +11,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --group dev --python ${{ matrix.python-version }}
+      # 刻意用 `uv venv` + `uv pip install`,而不是 `uv sync`。
+      #
+      # uv sync 走的是**通用解析**(universal resolution):它会为整个
+      # requires-python 区间挑一套通吃的版本。在本项目里那会让 3.11/3.12 也被
+      # 拉到 onnxruntime 1.23.2 —— 而真实用户 `pip install lm-mem` 在 3.12 上
+      # 拿到的是 1.28.0。结果就是 CI 测的配置和用户跑的配置不是同一个。
+      #
+      # uv pip install 是**单环境解析**,与 pip 语义一致,每个 matrix 版本装到
+      # 的正是该版本用户会装到的东西(3.10→1.23.2, 3.11+→1.28.0)。
+      - run: uv venv --python ${{ matrix.python-version }}
+      - run: uv pip install -e . pytest
+      - run: uv pip list | grep -E "^(onnxruntime|chromadb|mcp)[[:space:]]"
       # 单独 import 一次:依赖上界失效时(mcp 1.x→2.0 就移除过 mcp.server.fastmcp)
       # 这里最先炸,且不会被 conftest 的 fixture 报错掩盖成一堆 ERROR。
-      - run: uv run python -c "import lm_mem.mcp_tools, lm_mem.web, lm_mem.manage"
-      - run: uv run pytest -q
+      - run: .venv/bin/python -c "import lm_mem.mcp_tools, lm_mem.web, lm_mem.manage"
+      - run: .venv/bin/python -m pytest -q
