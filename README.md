@@ -28,18 +28,29 @@ lm-mem web start
 
 自动检测下列 agent 的配置目录，装了几个写几个：
 
-| agent | 检测目录 | 写入文件 |
-|---|---|---|
-| Claude Code | `~/.claude/` | `CLAUDE.md` |
-| Codex | `~/.codex/` | `AGENTS.md` |
-| opencode | `~/.config/opencode/` | `AGENTS.md` |
-| OpenClaw | `~/.openclaw/` | `AGENTS.md` |
+| agent | `--platform` 取值 | 检测目录 | 写入文件 |
+|---|---|---|---|
+| Claude Code | `claude` | `~/.claude/` | `CLAUDE.md` |
+| Codex | `codex` | `~/.codex/` | `AGENTS.md` |
+| opencode | `opencode` | `~/.config/opencode/` | `AGENTS.md` |
+| OpenClaw | `openclaw` | `~/.openclaw/` | `AGENTS.md` |
 
 ```bash
 lm-mem skill install      # 检测并写入(幂等，可重复执行以同步最新版本)
 lm-mem skill status       # 查看各文件安装状态
 lm-mem skill uninstall    # 移除写入的段落
 ```
+
+只想操作某几个 agent 时用 `--platform`（可重复）：
+
+```bash
+lm-mem skill install --platform claude                     # 只写 Claude Code
+lm-mem skill install --platform codex --platform openclaw  # 写这两个
+lm-mem skill uninstall --platform claude                   # 只从 Claude 移除
+```
+
+显式指定的 platform **优先于自动检测** —— 配置目录还不存在也会照写并新建
+（适合先把规则配好、之后再装那个 agent）。
 
 写入内容用 `<!-- lm-mem:begin -->…<!-- lm-mem:end -->` 包裹，不影响文件其余部分。
 

@@ -237,9 +237,17 @@ def _build_parser():
         ep.add_argument("action", nargs="?", default="status",
                         choices=["start", "stop", "restart", "status"])
 
-    sub.add_parser("skill", help="把 lm-mem 触发段落写入已检测到的 agent 规则文件") \
-        .add_argument("action", nargs="?", default="status",
-                      choices=["install", "uninstall", "status"])
+    skill = sub.add_parser(
+        "skill", help="把 lm-mem 触发段落写入 agent 规则文件(默认自动检测)")
+    skill.add_argument("action", nargs="?", default="status",
+                       choices=["install", "uninstall", "status"])
+    # 默认对所有检测到的 agent 生效;--platform 可只针对指定的(可重复)。
+    # choices 交给 argparse 校验,拼错时它会直接给出可选值列表。
+    from lm_mem.skill_install import PLATFORMS
+    skill.add_argument("--platform", action="append", choices=PLATFORMS, default=None,
+                       metavar="NAME",
+                       help="只操作指定 agent(可重复);留空则全部已检测到的。"
+                            f"可选:{'/'.join(PLATFORMS)}")
     return p
 
 
@@ -248,7 +256,7 @@ _SERVICES = {"backend": BACKEND, "web": WEB}
 _ACTIONS = {"start": _start, "stop": _stop, "status": _status}
 
 
-def _run(entity, action, host, port):
+def _run(entity, action, host, port, platforms=()):
     # mcp:自身即进程,前台阻塞运行,不走进程托管
     if entity == "mcp":
         _mcp_run()
@@ -257,7 +265,7 @@ def _run(entity, action, host, port):
         from lm_mem import skill_install
         {"install": skill_install.install,
          "uninstall": skill_install.uninstall,
-         "status": skill_install.status}[action]()
+         "status": skill_install.status}[action](platforms)
         return
     svc = _SERVICES.get(entity)
     if svc is None:
@@ -275,7 +283,8 @@ def main():
     p = _build_parser()
     args = p.parse_args()
     _run(args.entity, getattr(args, "action", ""),
-         getattr(args, "host", None), getattr(args, "port", None))
+         getattr(args, "host", None), getattr(args, "port", None),
+         tuple(getattr(args, "platform", None) or ()))
 
 
 if __name__ == "__main__":
