@@ -264,3 +264,20 @@ def test_special_char_ids_are_viewable_and_deletable(web_srv, mem_id):
     assert web._get_one(mem_id) is None
 
 
+
+
+def test_api_missing_memory_returns_404(web_srv):
+    """#6:JSON 接口要能区分"没找到"和"成功返回空",不能都是 200+null。"""
+    base, _ = web_srv
+    code, body = _req("GET", f"{base}/api/mem/definitely-not-here")
+    assert code == 404, f"应为 404,实际 {code}"
+    assert json.loads(body)["error"] == "not found"
+    # HTML 详情页仍是 200 + 友好页面(既有行为,有测试覆盖)
+    code, _ = _req("GET", f"{base}/mem/definitely-not-here")
+    assert code == 200
+
+
+def test_start_web_thread_removed(web_srv):
+    """#7:死代码已删除,别再回来。"""
+    _, web = web_srv
+    assert not hasattr(web, "start_web_thread")

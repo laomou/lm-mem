@@ -191,9 +191,31 @@ def _status(svc, host=None, port=None):
 # ── mcp ──────────────────────────────────────────────
 
 
+def _auto_purge():
+    """启动时清一次过期记忆。
+
+    TTL 到期的记忆此前只是"检索时被忽略",行一直留在库里 —— 没有任何东西会
+    自动删它们,于是 DB 单调增长、memory_stats.total 越来越虚高。这里在 MCP
+    启动时做一次清理,给 TTL 一个真正的回收点。
+
+    best-effort:后端连不上等任何异常都只警告,绝不阻断 MCP 启动。
+    设 LM_MEM_AUTO_PURGE=0 可关闭。
+    """
+    if os.environ.get("LM_MEM_AUTO_PURGE", "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    try:
+        from lm_mem.client import MemoryClient
+        n = MemoryClient().purge_expired()["deleted"]
+        if n:
+            _w(f"已清理 {n} 条过期记忆")
+    except Exception as exc:  # noqa: BLE001 —— 清理失败不该拖垮启动
+        _w(f"跳过过期清理({type(exc).__name__})")
+
+
 def _mcp_run():
     """在当前进程内加载并运行 MCP server(stdio 模式)。"""
     os.environ.setdefault("LM_MEM_BACKEND_URL", _backend_url())
+    _auto_purge()
     from lm_mem.mcp_tools import mcp
     mcp.run()
 

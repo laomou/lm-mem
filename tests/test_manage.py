@@ -107,3 +107,67 @@ def test_explicit_backend_url_beats_host_port():
 def test_default_backend_url_when_nothing_set():
     m = _manage()
     assert m._backend_url() == "http://127.0.0.1:8901"
+
+
+# ── #1:启动时自动回收过期记忆 ─────────────────────────
+
+
+@pytest.fixture()
+def purge_env(tmp_path, monkeypatch):
+    """嵌入式模式 + 干净临时 DB,供 _auto_purge 测试用。"""
+    monkeypatch.setenv("LM_MEM_DB_PATH", str(tmp_path / "db"))
+    monkeypatch.setenv("LM_MEM_EMBEDDED", "1")
+    monkeypatch.delenv("LM_MEM_BACKEND_URL", raising=False)
+    import lm_mem.backend as b
+    import lm_mem.client as c
+    importlib.reload(b)
+    importlib.reload(c)
+    yield c.MemoryClient()
+    importlib.reload(b)
+
+
+def _expire(client, mem_id):
+    col = client._col()
+    meta = col.get(ids=[mem_id], include=["metadatas"])["metadatas"][0]
+    meta["expires_at"] = 1.0
+    col.update(ids=[mem_id], metadatas=[meta])
+
+
+def test_auto_purge_deletes_expired_on_startup(purge_env, monkeypatch):
+    client = purge_env
+    keep = client.add("长期偏好", user_id="u")["id"]
+    dead = client.add("临时便签", user_id="u", force=True, ttl_seconds=3600)["id"]
+    _expire(client, dead)
+    assert client._col().count() == 2
+
+    m = _manage()
+    m._auto_purge()
+
+    assert client._col().count() == 1, "过期项应被真正删除,而不只是检索时被过滤"
+    assert client._col().get(ids=[keep])["ids"] == [keep]
+    assert client._col().get(ids=[dead])["ids"] == []
+
+
+def test_auto_purge_can_be_disabled(purge_env, monkeypatch):
+    client = purge_env
+    dead = client.add("临时便签", user_id="u", ttl_seconds=3600)["id"]
+    _expire(client, dead)
+    monkeypatch.setenv("LM_MEM_AUTO_PURGE", "0")
+
+    m = _manage()
+    m._auto_purge()
+
+    assert client._col().count() == 1, "LM_MEM_AUTO_PURGE=0 时不该删任何东西"
+
+
+def test_auto_purge_never_blocks_startup(monkeypatch, capsys):
+    """后端连不上等任何异常都只警告,绝不抛出 —— 否则 MCP 起不来。"""
+    m = _manage()
+    monkeypatch.delenv("LM_MEM_AUTO_PURGE", raising=False)
+    monkeypatch.setenv("LM_MEM_BACKEND_URL", "http://127.0.0.1:1")  # 必然连不上
+    monkeypatch.delenv("LM_MEM_EMBEDDED", raising=False)
+    import lm_mem.backend as b
+    importlib.reload(b)
+    m._auto_purge()          # 不得抛异常
+    assert "跳过过期清理" in capsys.readouterr().err
+    importlib.reload(b)

@@ -131,7 +131,7 @@ class MemoryClient:
         *,
         content: str = "",
         metadata: str = "",
-        tags: str = "",
+        tags: str | None = None,
         ttl_seconds: int = 0,
     ) -> dict:
         """更新记忆。
@@ -140,7 +140,7 @@ class MemoryClient:
             mem_id: 记忆 id。
             content: 新文本（留空不改）。
             metadata: JSON 对象字符串，合并进现有元数据。
-            tags: 新的逗号分隔标签。
+            tags: None(默认)不改；传字符串则整体替换，传 "" 即清空标签。
             ttl_seconds: >0 续期；<0 清除过期（永久）；0 不改动。
         """
         existing = self._col().get(ids=[mem_id], include=["documents", "metadatas"])
@@ -149,7 +149,9 @@ class MemoryClient:
         meta = existing["metadatas"][0] or {}
         now = time.time()
         meta["updated_at"] = now
-        if tags:
+        # 用 None 而非 "" 表示"不改":否则无法清空标签,而 tags="   " 却能清空
+        # (先判真再 strip),行为不可发现。
+        if tags is not None:
             meta["tags"] = tags.strip()
         if metadata:
             meta.update(parse_metadata(metadata))
