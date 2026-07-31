@@ -461,7 +461,13 @@ class _Handler(BaseHTTPRequestHandler):
 
             if path.startswith("/api/mem/"):
                 mid = unquote(path[len("/api/mem/"):])
-                return self._send(200, json.dumps(_get_one(mid), ensure_ascii=False),
+                rec = _get_one(mid)
+                if rec is None:
+                    # JSON 接口要能区分"没找到"和"成功返回空",不能都是 200
+                    return self._send(404, json.dumps(
+                        {"error": "not found", "id": mid}, ensure_ascii=False),
+                        "application/json; charset=utf-8")
+                return self._send(200, json.dumps(rec, ensure_ascii=False),
                                   "application/json; charset=utf-8")
 
             if path.startswith("/mem/"):
@@ -495,24 +501,6 @@ def main() -> None:
         print("\n已退出。")
     finally:
         httpd.server_close()
-
-
-def start_web_thread(host=None, port=None):
-    """在后台 daemon 线程启动 Web 台,端口被占则静默跳过(端口抢占单例)。"""
-    import threading
-
-    host = (host or os.environ.get("LM_MEM_WEB_HOST", _HOST)).strip() or _HOST
-    port = port or int(os.environ.get("LM_MEM_WEB_PORT", str(_PORT)))
-    try:
-        httpd = ThreadingHTTPServer((host, port), _Handler)
-        t = threading.Thread(target=httpd.serve_forever, daemon=True)
-        t.start()
-        import sys as _sys
-        _sys.stderr.write(f"[lm-mem] Web 记忆: http://{host}:{port} (可查看/检索/删除)\n")
-        _sys.stderr.flush()
-    except OSError:
-        pass  # 端口被占,说明已有实例起了 Web 台,静默跳过
-
 
 if __name__ == "__main__":
     main()

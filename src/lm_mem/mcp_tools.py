@@ -153,7 +153,7 @@ def update_memory(
     mem_id: str,
     content: str = "",
     metadata: str = "",
-    tags: str = "",
+    tags: str | None = None,
     ttl_seconds: int = 0,
 ) -> str:
     """按 id 更新记忆(保留原作用域;可同时改文本/元数据/标签/过期时间)。
@@ -162,7 +162,7 @@ def update_memory(
         mem_id: 记忆 id。
         content: 可选,新的文本内容(留空则不改文本)。
         metadata: 可选,JSON 对象字符串,合并进现有自定义元数据。
-        tags: 可选,新的逗号分隔标签(留空则不改)。
+        tags: 可选。不传(null)则不改标签;传字符串整体替换;传空字符串 "" 即清空标签。
         ttl_seconds: 可选。>0 从现在起续期该秒数;<0 立即清除过期时间(转为永久);
                      0(默认)不改动过期设置。
 

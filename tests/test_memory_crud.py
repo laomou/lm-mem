@@ -127,3 +127,26 @@ def test_messages_element_missing_field(srv):
 def test_messages_element_not_dict(srv):
     with pytest.raises(ValueError, match="对象"):
         srv.add_memory(messages=json.dumps(["just a string"]))
+
+
+# ── tags 清空(#5) ─────────────────────────────────────
+
+
+def test_update_can_clear_tags(srv):
+    """tags="" 应能清空标签。
+
+    修复前:"" 被当作"不改",而 tags="   " 反而能清空(先判真再 strip)——
+    想清空得传空格,行为不可发现。现在 None=不改 / ""=清空。
+    """
+    mid = get_id(srv.add_memory(content="有标签", user_id="u1", tags="a,b"))
+    assert r(srv.get_memory(mid))["tags"] == "a,b"
+
+    srv.update_memory(mid, tags="")                      # 显式清空
+    assert r(srv.get_memory(mid))["tags"] == ""
+
+    srv.update_memory(mid, tags="x,y")                   # 再整体替换
+    assert r(srv.get_memory(mid))["tags"] == "x,y"
+
+    srv.update_memory(mid, content="只改文本")            # 不传 tags → 不动
+    got = r(srv.get_memory(mid))
+    assert got["tags"] == "x,y" and got["content"] == "只改文本"

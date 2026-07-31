@@ -67,6 +67,7 @@ lm-mem skill uninstall    # 移除写入的段落
 | `LM_MEM_BACKEND_HOST` | `127.0.0.1` | 后端地址,`backend`/`web`/`mcp` 共用 |
 | `LM_MEM_BACKEND_PORT` | `8901` | 后端端口,`backend`/`web`/`mcp` 共用 |
 | `LM_MEM_EMBEDDED` | (关) | `=1` 时进程内嵌 Chroma 直读 `LM_MEM_DB_PATH`,不需要常驻后端 |
+| `LM_MEM_AUTO_PURGE` | `1` | `lm-mem mcp` 启动时清一次过期记忆;`=0` 关闭(仍可手动调 `purge_expired`) |
 | `LM_MEM_DATA_DIR` | `~/.lm-mem` | 数据根目录 |
 | `LM_MEM_DB_PATH` | `$LM_MEM_DATA_DIR/chroma` | 数据库路径 |
 | `LM_MEM_WEB_HOST` | `127.0.0.1` | Web UI 绑定地址 |
